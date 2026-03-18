@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Project Intake Form</title>
+  <style>
+    :root{
+      --bg:#ffffff;
+      --card:#ffffff;
+      --text:#111827;          
+      --muted:#4b5563;         
+      --border:#d1d5db;        
+      --border2:#9ca3af;       
+      --focus:#2563eb;         
+      --danger:#b91c1c;        
+      --dangerBg:#fee2e2;      
+      --shadow:0 6px 18px rgba(17,24,39,.08);
+      --radius:14px;
+      --font: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+    }
+
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:var(--font);
+      color:var(--text);
+      background:var(--bg);
+      line-height:1.35;
+    }
+
+    header{
+      max-width:1100px;
+      margin:0 auto;
+      padding:28px 18px 8px;
+    }
+    header h1{margin:0 0 6px;font-size:26px;letter-spacing:.2px}
+    header p{margin:0;color:var(--muted)}
+
+    .wrap{max-width:1100px;margin:0 auto;padding:16px 18px 42px}
+
+    form{display:grid;gap:16px}
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      overflow:hidden;
+    }
+
+    .card-h{
+      padding:14px 16px;
+      border-bottom:1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      background:#f9fafb;
+    }
+
+    .card-h h2{margin:0;font-size:16px;font-weight:700}
+
+    .badge{
+      font-size:12px;
+      color:var(--muted);
+      border:1px solid var(--border);
+      border-radius:999px;
+      padding:4px 10px;
+      background:#ffffff;
+    }
+
+    .card-b{padding:16px}
+
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+    .field{grid-column:span 12}
+    @media (min-width: 860px){
+      .field.half{grid-column:span 6}
+      .field.third{grid-column:span 4}
+      .field.quarter{grid-column:span 3}
+      .field.twoThirds{grid-column:span 8}
+    }
+
+    label{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      font-size:13px;
+      margin-bottom:6px;
+      color:var(--muted);
+      font-weight:600;
+    }
+
+    .req{color:var(--danger);font-weight:800;margin-left:8px}
+
+    input[type="text"],
+    input[type="date"],
+    input[type="number"],
+    textarea,
+    select{
+      width:100%;
+      padding:11px 12px;
+      border-radius:12px;
+      border:1px solid var(--border2);
+      background:#ffffff;
+      color:var(--text);
+      outline:none;
+    }
+
+    textarea{min-height:110px;resize:vertical}
+
+    input::placeholder, textarea::placeholder{color:#6b7280}
+
+    input:focus, textarea:focus, select:focus{
+      border-color:var(--focus);
+      box-shadow:0 0 0 4px rgba(37,99,235,.15);
+    }
+
+    .hint{margin-top:6px;font-size:12px;color:var(--muted)}
+
+    .error{
+      margin-top:6px;
+      font-size:12px;
+      color:var(--danger);
+      display:none;
+      background:var(--dangerBg);
+      border:1px solid rgba(185,28,28,.25);
+      padding:8px 10px;
+      border-radius:12px;
+    }
+    .field.invalid .error{display:block}
+    .field.invalid input,
+    .field.invalid textarea,
+    .field.invalid select{
+      border-color:rgba(185,28,28,.6);
+      box-shadow:0 0 0 4px rgba(185,28,28,.12);
+    }
+
+    .rows{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+    .row{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px;
+      background:#ffffff;
+    }
+
+    .row-grid{display:grid;grid-template-columns:1fr;gap:10px}
+
+    @media (min-width: 860px){
+      .row-grid{
+        grid-template-columns: 5fr 5fr 2fr auto;
+        align-items:end;
+      }
+      .billing-grid{
+        grid-template-columns: 1fr 100px 1fr auto;
+        align-items:end;
+      }
+      .internal-grid{
+        grid-template-columns: 1fr 1fr auto;
+        align-items:end;
+      }
+    }
+
+    .row .mini-label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:0 0 6px}
+
+    .sponsorWrap{
+      display:flex;align-items:center;gap:8px;
+      padding:10px 10px;
+      border:1px solid var(--border2);
+      border-radius:12px;
+      background:#ffffff;
+      height:44px;
+    }
+    .sponsorWrap input{width:auto;margin:0}
+
+    .actions{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:space-between;
+      padding:14px 16px;
+      border-top:1px solid var(--border);
+      background:#f9fafb;
+    }
+
+    .btn{
+      appearance:none;
+      border:1px solid var(--border2);
+      background:#ffffff;
+      color:var(--text);
+      padding:10px 12px;
+      border-radius:12px;
+      cursor:pointer;
+      font-weight:700;
+    }
+    .btn:hover{border-color:var(--focus)}
+    .btn.primary{background:var(--focus);border-color:var(--focus);color:#ffffff}
+    .btn.success{background:#16a34a;border-color:#16a34a;color:#ffffff}
+    .btn.danger{background:#ffffff;border-color:rgba(185,28,28,.55);color:var(--danger)}
+    .btn.disabled{opacity:0.5;cursor:not-allowed;}
+
+    .small{font-size:12px;color:var(--muted)}
+
+    .checklist{display:grid;grid-template-columns:1fr;gap:10px;margin-top:6px}
+    @media (min-width: 860px){.checklist{grid-template-columns:repeat(2,minmax(0,1fr));}}
+
+    .chk{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      background:#ffffff;
+    }
+
+    .fileList{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:12px}
+
+    .footerNote{margin-top:14px;color:var(--muted);font-size:12px}
+
+    .sr-only{
+      position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+    }
+    
+    .billing-section {
+      background: #f9fafb;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Project Intake Form</h1>
+    <p>Capture project information, stakeholders, and documentation needs.</p>
+  </header>
+
+  <div class="wrap">
+    <form id="projectForm" novalidate>
+
+      <!-- Section 1 -->
+      <section class="card" aria-labelledby="s1">
+        <div class="card-h">
+          <h2 id="s1">Section 1 – Project Information</h2>
+          <span class="badge">All fields mandatory</span>
+        </div>
+        <div class="card-b">
+          <div class="grid">
+
+            <div class="field quarter" data-required="true">
+              <label for="client">Client <span class="req" aria-hidden="true">*</span></label>
+              <input id="client" name="client" type="text" placeholder="e.g. Acme Pharma" required />
+              <div class="error">Please enter a Client.</div>
+            </div>
+
+            <div class="field quarter" data-required="true">
+              <label for="sheetRef">Sheet Ref <span class="req" aria-hidden="true">*</span></label>
+              <input id="sheetRef" name="sheetRef" type="text" placeholder="e.g. SM025" pattern="^[A-Za-z]{2,3}\d{3}$" required />
+              <div class="error">Format: Initials + 3 digits (e.g. SM025).</div>
+            </div>
+
+            <div class="field quarter" data-required="true">
+              <label for="projectName">Project Name <span class="req" aria-hidden="true">*</span></label>
+              <input id="projectName" name="projectName" type="text" placeholder="e.g. Global Website Refresh" required />
+              <div class="error">Please enter a Project Name.</div>
+            </div>
+
+            <div class="field quarter" data-required="true">
+              <label for="projectType">Project Type <span class="req" aria-hidden="true">*</span></label>
+              <select id="projectType" name="projectType" required>
+                <option value="" disabled selected>Select type</option>
+                <option value="Web">Web</option>
+                <option value="App">App</option>
+                <option value="Strategy">Strategy</option>
+                <option value="Design">Design</option>
+                <option value="Content">Content</option>
+                <option value="XR/AR">XR/AR</option>
+              </select>
+              <div class="error">Please select a Project Type.</div>
+            </div>
+            
+            <div class="field quarter" data-required="true">
+              <label for="projectSize">Project Size <span class="req" aria-hidden="true">*</span></label>
+              <select id="projectSize" name="projectSize" required>
+                <option value="" disabled selected>Select size</option>
+                <option value="Small">Small</option>
+                <option value="Medium">Medium</option>
+                <option value="Large">Large</option>
+                <option value="Enterprise">Enterprise</option>
+              </select>
+              <div class="error">Please select a Project Size.</div>
+            </div>
+
+            <div class="field quarter" data-required="true">
+              <label for="value">Value (GBP) <span class="req" aria-hidden="true">*</span></label>
+              <input id="value" name="value" type="number" inputmode="decimal" min="0" step="0.01" placeholder="e.g. 25000" required />
+              <div class="error">Please enter the Value.</div>
+            </div>
+
+            <div class="field quarter" data-required="true">
+              <label for="startDate">SOW Start Date <span class="req" aria-hidden="true">*</span></label>
+              <input id="startDate" name="startDate" type="date" required />
+              <div class="error">Please select a Start Date.</div>
+            </div>
+
+            <div class="field quarter" data-required="true">
+              <label for="endDate">SOW End Date <span class="req" aria-hidden="true">*</span></label>
+              <input id="endDate" name="endDate" type="date" required />
+              <div class="error">Please select an End Date.</div>
+            </div>
+
+          </div>
+
+          <!-- Billing Milestones -->
+          <div class="billing-section">
+            <h3 style="margin:0 0 4px;font-size:14px;">Billing Milestones <span class="req">*</span></h3>
+            <p class="small" style="margin:0 0 12px;">Define the stages and percentages for invoicing. Total must equal 100%.</p>
+            
+            <div class="field" id="billingField">
+              <div class="rows" id="billingRows">
+                <!-- Injected via JS -->
+              </div>
+              <div class="error" id="billingError" style="margin-top:10px;">Total percentage must equal 100%.</div>
+              <button class="btn" type="button" id="addBillingBtn" style="margin-top:10px; font-size:12px;">+ Add milestone</button>
+            </div>
+          </div>
+
+          <div class="grid" style="margin-top:12px;">
+            <div class="field" data-required="true">
+              <label for="summary">Project Summary <span class="req" aria-hidden="true">*</span></label>
+              <textarea id="summary" name="summary" placeholder="Provide a short summary of the project..." required></textarea>
+              <div class="error">Please provide a Project Summary.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2 -->
+      <section class="card" aria-labelledby="s2">
+        <div class="card-h">
+          <h2 id="s2">Section 2 – Flipside Stakeholders</h2>
+          <span class="badge">Mandatory</span>
+        </div>
+        <div class="card-b">
+          <p class="small" style="margin-top:0">
+            Add any known internal stakeholders. Account Lead and Project Manager are required as a minimum.
+          </p>
+          <div class="field" id="internalField" data-required="true">
+            <div class="rows" id="internalRows">
+              <!-- Injected via JS -->
+            </div>
+            <div class="error" id="internalError">Please ensure all names and roles are provided.</div>
+
+            <div style="margin-top:10px;">
+              <button class="btn" type="button" id="addInternalBtn">+ Add internal stakeholder</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 3 -->
+      <section class="card" aria-labelledby="s3">
+        <div class="card-h">
+          <h2 id="s3">Section 3 – Client Stakeholders</h2>
+          <span class="badge">Mandatory</span>
+        </div>
+        <div class="card-b">
+          <p class="small" style="margin-top:0">
+            Add one or more stakeholders. Name and Role display side-by-side on wider screens. Select exactly one Sponsor.
+          </p>
+
+          <div class="field" id="stakeholderField" data-required="true">
+            <div class="rows" id="stakeholderRows" aria-label="Client stakeholders">
+              <!-- Rows injected by JS -->
+            </div>
+            <div class="error" id="stakeholderError">Please add at least one stakeholder and complete the Name and Role fields.</div>
+
+            <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+              <button class="btn" type="button" id="addStakeholder">+ Add stakeholder</button>
+              <span class="small">Tip: use the Sponsor option to identify the primary client sponsor.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4 -->
+      <section class="card" aria-labelledby="s4">
+        <div class="card-h">
+          <h2 id="s4">Section 4 – Project Documentation</h2>
+          <span class="badge">Mixed</span>
+        </div>
+        <div class="card-b">
+          <div class="grid">
+
+            <div class="field" data-required="false">
+              <label for="docsUpload">Document Upload <span class="small">(optional)</span></label>
+              <input id="docsUpload" name="docsUpload" type="file" multiple
+                     accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv,.txt" />
+              <div class="hint">You can select and upload multiple documents (e.g. PPT, PDF, DOC, XLS).</div>
+              <ul class="fileList" id="fileList" aria-live="polite"></ul>
+            </div>
+
+            <div class="field" data-required="true" id="docsRequiredField">
+              <label>Documents Required <span class="req" aria-hidden="true">*</span></label>
+
+              <div class="checklist">
+                <label class="chk"><input type="checkbox" name="docsRequired" value="RACI" /> RACI</label>
+                <label class="chk"><input type="checkbox" name="docsRequired" value="RAID Log" /> RAID Log</label>
+                <label class="chk"><input type="checkbox" name="docsRequired" value="Risk Register" /> Risk Register</label>
+                <label class="chk"><input type="checkbox" name="docsRequired" value="Communications Plan" /> Communications Plan</label>
+              </div>
+
+              <div class="hint">Select one or more documents to generate.</div>
+              <div class="error" id="docsRequiredError">Please select at least one required document.</div>
+            </div>
+
+          </div>
+
+          <div class="footerNote">
+            Use <strong>Generate documents</strong> to submit the form and trigger document generation downstream.
+          </div>
+        </div>
+
+        <div class="actions">
+          <div class="small">Required fields validated on submit.</div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+            <button class="btn" type="reset">Reset</button>
+            <button class="btn success" type="submit" id="generateBtn">Generate documents</button>
+          </div>
+        </div>
+      </section>
+
+    </form>
+  </div>
+
+  <script>
+    function setInvalid(fieldEl, invalid) {
+      if (!fieldEl) return;
+      fieldEl.classList.toggle('invalid', !!invalid);
+    }
+
+    // --- Billing Milestones ---
+    const billingRows = document.getElementById('billingRows');
+    const addBillingBtn = document.getElementById('addBillingBtn');
+    const billingError = document.getElementById('billingError');
+    let billingIndex = 0;
+
+    function billingRowTemplate(idx, stage="", percentage="") {
+      return `
+        <div class="row" data-billing-row="${idx}">
+          <div class="row-grid billing-grid">
+            <div>
+              <span class="mini-label">Stage <span class="req">*</span></span>
+              <input type="text" name="billingStage_${idx}" placeholder="e.g. Deposit" value="${stage}" required />
+            </div>
+            <div>
+              <span class="mini-label">Percentage (%) <span class="req">*</span></span>
+              <input type="number" name="billingPercent_${idx}" placeholder="0" value="${percentage}" min="0" max="100" required />
+            </div>
+            <div>
+              <span class="mini-label">Estimated Date <span class="req">*</span></span>
+              <input type="date" name="billingDate_${idx}" required />
+            </div>
+            <div>
+              <span class="sr-only">Remove</span>
+              <button type="button" class="btn danger" data-billing-remove="${idx}">Remove</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function addBillingRow(stage="", percentage="") {
+      billingRows.insertAdjacentHTML('beforeend', billingRowTemplate(billingIndex, stage, percentage));
+      billingIndex++;
+    }
+
+    addBillingBtn.addEventListener('click', () => addBillingRow());
+    billingRows.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-billing-remove]');
+      if (!btn) return;
+      const rows = billingRows.querySelectorAll('.row');
+      if (rows.length > 1) {
+        billingRows.querySelector(`[data-billing-row="${btn.getAttribute('data-billing-remove')}"]`).remove();
+      } else {
+        alert("You must have at least one billing milestone.");
+      }
+    });
+
+    // Add default milestones
+    addBillingRow('Deposit / Kickoff', '50');
+    addBillingRow('Completion', '50');
+
+
+    // --- Internal (Flipside) Stakeholders ---
+    const internalRows = document.getElementById('internalRows');
+    const addInternalBtn = document.getElementById('addInternalBtn');
+    const internalError = document.getElementById('internalError');
+    let internalIndex = 0;
+
+    function internalRowTemplate(idx, role="", isFixed=false) {
+      const disabledRole = isFixed ? 'readonly' : '';
+      const disabledBtn = isFixed ? 'disabled' : '';
+      const btnClass = isFixed ? 'btn danger disabled' : 'btn danger';
+      
+      return `
+        <div class="row" data-internal-row="${idx}">
+          <div class="row-grid internal-grid">
+            <div>
+              <span class="mini-label">Stakeholder Name <span class="req">*</span></span>
+              <input type="text" name="internalName_${idx}" placeholder="Stakeholder name" required />
+            </div>
+            <div>
+              <span class="mini-label">Role <span class="req">*</span></span>
+              <input type="text" name="internalRole_${idx}" placeholder="Role" value="${role}" required ${disabledRole} />
+            </div>
+            <div>
+              <span class="sr-only">Remove</span>
+              <button type="button" class="${btnClass}" data-internal-remove="${idx}" ${disabledBtn}>Remove</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function addInternalRow(role="", isFixed=false) {
+      internalRows.insertAdjacentHTML('beforeend', internalRowTemplate(internalIndex, role, isFixed));
+      internalIndex++;
+    }
+
+    addInternalBtn.addEventListener('click', () => addInternalRow());
+    internalRows.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-internal-remove]');
+      if (!btn || btn.hasAttribute('disabled')) return;
+      internalRows.querySelector(`[data-internal-row="${btn.getAttribute('data-internal-remove')}"]`).remove();
+    });
+
+    // Fixed default rows
+    addInternalRow('Account Lead', true);
+    addInternalRow('Project Manager', true);
+
+
+    // --- Client Stakeholders ---
+    const stakeholderRows = document.getElementById('stakeholderRows');
+    const addStakeholderBtn = document.getElementById('addStakeholder');
+    const stakeholderError = document.getElementById('stakeholderError');
+    let stakeholderIndex = 0;
+
+    function stakeholderRowTemplate(idx) {
+      return `
+        <div class="row" data-row="${idx}">
+          <div class="row-grid">
+            <div>
+              <span class="mini-label">Stakeholder Name <span class="req" aria-hidden="true">*</span></span>
+              <input type="text" name="stakeholderName_${idx}" placeholder="Stakeholder name" required />
+            </div>
+            <div>
+              <span class="mini-label">Role <span class="req" aria-hidden="true">*</span></span>
+              <input type="text" name="stakeholderRole_${idx}" placeholder="Role" required />
+            </div>
+            <div>
+              <span class="mini-label">Sponsor?</span>
+              <label class="sponsorWrap">
+                <input type="radio" name="sponsor" value="${idx}" aria-label="Sponsor" />
+                <span class="small">Sponsor</span>
+              </label>
+            </div>
+            <div>
+              <span class="sr-only">Remove</span>
+              <button type="button" class="btn danger" data-remove="${idx}">Remove</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function addStakeholderRow() {
+      stakeholderRows.insertAdjacentHTML('beforeend', stakeholderRowTemplate(stakeholderIndex));
+      if (stakeholderIndex === 0) {
+        // select first as sponsor by default
+        setTimeout(() => {
+          const r = stakeholderRows.querySelector(`input[name="sponsor"][value="0"]`);
+          if (r) r.checked = true;
+        }, 10);
+      }
+      stakeholderIndex++;
+      stakeholderError.style.display = 'none';
+    }
+
+    addStakeholderBtn.addEventListener('click', addStakeholderRow);
+    stakeholderRows.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-remove]');
+      if (!btn) return;
+      if(stakeholderRows.querySelectorAll('.row').length > 1) {
+        stakeholderRows.querySelector(`[data-row="${btn.getAttribute('data-remove')}"]`).remove();
+      } else {
+        alert("You must have at least one client stakeholder.");
+      }
+    });
+
+    addStakeholderRow();
+
+    // --- File Upload ---
+    const docsUpload = document.getElementById('docsUpload');
+    const fileList = document.getElementById('fileList');
+
+    docsUpload.addEventListener('change', () => {
+      fileList.innerHTML = '';
+      const files = Array.from(docsUpload.files || []);
+      if (!files.length) return;
+      files.forEach(f => {
+        const li = document.createElement('li');
+        li.textContent = `${f.name} (${Math.round(f.size/1024)} KB)`;
+        fileList.appendChild(li);
+      });
+    });
+
+
+    // --- Validation ---
+    const form = document.getElementById('projectForm');
+    const docsRequiredError = document.getElementById('docsRequiredError');
+
+    function validateDocsRequired() {
+      const selected = form.querySelectorAll('input[name="docsRequired"]:checked').length;
+      const invalid = selected === 0;
+      docsRequiredError.style.display = invalid ? 'block' : 'none';
+      return !invalid;
+    }
+
+    function validateBilling() {
+      let total = 0;
+      let ok = true;
+      billingRows.querySelectorAll('.row').forEach(r => {
+        const pctInput = r.querySelector('input[type="number"]');
+        if (!pctInput.value) ok = false;
+        total += Number(pctInput.value || 0);
+      });
+      
+      const is100 = Math.abs(total - 100) < 0.01;
+      billingError.style.display = (!ok || !is100) ? 'block' : 'none';
+      if (!ok) billingError.textContent = "Please fill out all billing fields.";
+      else if (!is100) billingError.textContent = `Total percentage must equal 100% (currently ${total}%).`;
+      
+      return ok && is100;
+    }
+
+    function validateInternal() {
+      let ok = true;
+      internalRows.querySelectorAll('.row').forEach(r => {
+        const inputs = r.querySelectorAll('input[type="text"]');
+        inputs.forEach(i => { if (!i.value.trim()) ok = false; });
+      });
+      internalError.style.display = ok ? 'none' : 'block';
+      return ok;
+    }
+
+    function validateStakeholders() {
+      const rows = stakeholderRows.querySelectorAll('.row');
+      if (rows.length === 0) return false;
+      let ok = true;
+      rows.forEach(r => {
+        const inputs = r.querySelectorAll('input[type="text"]');
+        inputs.forEach(i => { if (!i.value.trim()) ok = false; });
+      });
+      stakeholderError.style.display = ok ? 'none' : 'block';
+      return ok;
+    }
+
+    function validateDates() {
+      const start = document.getElementById('startDate');
+      const end = document.getElementById('endDate');
+      if (!start.value || !end.value) return true;
+      const ok = new Date(start.value) <= new Date(end.value);
+      end.setCustomValidity(ok ? '' : 'End date must be on or after the start date.');
+      return ok;
+    }
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      form.querySelectorAll('.field').forEach(f => f.classList.remove('invalid'));
+      let allOk = true;
+
+      const requiredInputs = form.querySelectorAll('input[required], textarea[required], select[required]');
+      requiredInputs.forEach(input => {
+        const field = input.closest('.field') || input.closest('.row');
+        if (!input.checkValidity()) {
+          allOk = false;
+          setInvalid(field, true);
+        }
+      });
+
+      if (!validateDates()) allOk = false;
+      if (!validateBilling()) allOk = false;
+      if (!validateInternal()) allOk = false;
+      if (!validateStakeholders()) allOk = false;
+      if (!validateDocsRequired()) allOk = false;
+
+      if (!allOk) {
+        const firstInvalid = form.querySelector('.invalid input, .invalid textarea, .invalid select');
+        if (firstInvalid) firstInvalid.focus();
+        return;
+      }
+
+      const formData = new FormData(form);
+
+      const billings = [];
+      billingRows.querySelectorAll('.row').forEach(r => {
+        const idx = r.getAttribute('data-billing-row');
+        billings.push({
+          stage: r.querySelector(`input[name="billingStage_${idx}"]`).value,
+          percentage: Number(r.querySelector(`input[name="billingPercent_${idx}"]`).value),
+          date: r.querySelector(`input[name="billingDate_${idx}"]`).value
+        });
+      });
+
+      const flipside = [];
+      internalRows.querySelectorAll('.row').forEach(r => {
+        const idx = r.getAttribute('data-internal-row');
+        flipside.push({
+          name: r.querySelector(`input[name="internalName_${idx}"]`).value,
+          role: r.querySelector(`input[name="internalRole_${idx}"]`).value
+        });
+      });
+
+      const clients = [];
+      stakeholderRows.querySelectorAll('.row').forEach(r => {
+        const idx = r.getAttribute('data-row');
+        clients.push({
+          name: r.querySelector(`input[name="stakeholderName_${idx}"]`).value,
+          role: r.querySelector(`input[name="stakeholderRole_${idx}"]`).value,
+          sponsor: formData.get('sponsor') === idx
+        });
+      });
+
+      const payload = {
+        client: formData.get('client'),
+        sheetRef: formData.get('sheetRef'),
+        projectName: formData.get('projectName'),
+        projectType: formData.get('projectType'),
+        projectSize: formData.get('projectSize'),
+        valueGBP: Number(formData.get('value')),
+        sowStartDate: formData.get('startDate'),
+        sowEndDate: formData.get('endDate'),
+        billingMilestones: billings,
+        projectSummary: formData.get('summary'),
+        flipsideStakeholders: flipside,
+        clientStakeholders: clients,
+        documentsRequired: formData.getAll('docsRequired'),
+        uploadedFiles: Array.from(docsUpload.files || []).map(f => f.name)
+      };
+
+      console.log('Submitted payload:', payload);
+      alert('Form submitted successfully. Check console for payload JSON.');
+    });
+
+    form.querySelectorAll('input[name="docsRequired"]').forEach(chk => {
+      chk.addEventListener('change', validateDocsRequired);
+    });
+    document.getElementById('startDate').addEventListener('change', validateDates);
+    document.getElementById('endDate').addEventListener('change', validateDates);
+
+  </script>
+</body>
+</html>
