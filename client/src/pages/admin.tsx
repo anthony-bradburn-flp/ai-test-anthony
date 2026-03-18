@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Key, BrainCircuit, Save } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Key, BrainCircuit, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -79,10 +81,123 @@ const INITIAL_USERS = [
   { id: "u3", name: "Charlie Davis", email: "charlie@flipsidegroup.com", role: "Viewer", status: "Inactive" },
 ];
 
+type AiSettingsResponse = {
+  provider: "openai" | "anthropic";
+  orgId: string;
+  systemPrompt: string;
+  companyName: string;
+  hasApiKey: boolean;
+  trainingDocFilename: string | null;
+  trainingDocUploadedAt: string | null;
+  trainingDocSize: number | null;
+};
+
 export default function AdminPage() {
   const [templates, setTemplates] = useState(INITIAL_TEMPLATES);
   const [packages, setPackages] = useState(INITIAL_PACKAGES);
   const [users, setUsers] = useState(INITIAL_USERS);
+
+  // AI Settings state
+  const queryClient = useQueryClient();
+  const [provider, setProvider] = useState<"openai" | "anthropic">("openai");
+  const [apiKey, setApiKey] = useState("");
+  const [orgId, setOrgId] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [showDocContent, setShowDocContent] = useState(false);
+  const [docContentPreview, setDocContentPreview] = useState<string | null>(null);
+  const trainingDocInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: aiSettings } = useQuery<AiSettingsResponse>({
+    queryKey: ["/api/admin/ai-settings"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/ai-settings");
+      if (!res.ok) throw new Error("Failed to load AI settings");
+      return res.json();
+    },
+    staleTime: 0,
+  });
+
+  // Sync fetched settings into local form state once loaded
+  useState(() => {
+    if (aiSettings) {
+      setProvider(aiSettings.provider);
+      setSystemPrompt(aiSettings.systemPrompt);
+      setCompanyName(aiSettings.companyName);
+      setOrgId(aiSettings.orgId);
+    }
+  });
+
+  const saveSettingsMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, string> = { provider, orgId, systemPrompt, companyName };
+      if (apiKey) body.apiKey = apiKey;
+      const res = await fetch("/api/admin/ai-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Failed to save settings");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/ai-settings"] });
+      toast.success("AI settings saved");
+    },
+    onError: () => toast.error("Failed to save settings"),
+  });
+
+  const uploadTrainingDocMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const content = await file.text();
+      const res = await fetch("/api/admin/ai-settings/training-doc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, filename: file.name, size: file.size }),
+      });
+      if (!res.ok) throw new Error("Upload failed");
+      return { content, result: await res.json() };
+    },
+    onSuccess: ({ content }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/ai-settings"] });
+      setDocContentPreview(content);
+      toast.success("Training document uploaded");
+    },
+    onError: () => toast.error("Failed to upload training document"),
+  });
+
+  const deleteTrainingDocMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/ai-settings/training-doc", { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/ai-settings"] });
+      setDocContentPreview(null);
+      setShowDocContent(false);
+      toast.success("Training document removed");
+    },
+    onError: () => toast.error("Failed to remove training document"),
+  });
+
+  const handleTrainingDocFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    uploadTrainingDocMutation.mutate(file);
+    e.target.value = "";
+  };
+
+  const formatDocDate = (iso: string | null) => {
+    if (!iso) return "";
+    return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  };
+
+  const formatDocSize = (bytes: number | null) => {
+    if (!bytes) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   const SectionCard = ({
     title,
@@ -310,31 +425,41 @@ export default function AdminPage() {
               title="AI Generation Configuration"
               description="Configure the AI provider used to automatically draft governance documents."
               action={
-                <Button size="sm" className="font-bold bg-primary text-primary-foreground">
-                  <Save className="h-4 w-4 mr-1" /> Save Settings
+                <Button
+                  size="sm"
+                  className="font-bold bg-primary text-primary-foreground"
+                  onClick={() => saveSettingsMutation.mutate()}
+                  disabled={saveSettingsMutation.isPending}
+                >
+                  <Save className="h-4 w-4 mr-1" />
+                  {saveSettingsMutation.isPending ? "Saving…" : "Save Settings"}
                 </Button>
               }
             >
               <div className="p-5 space-y-8">
+                {/* Provider */}
                 <div className="space-y-4">
-                  <div>
-                    <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
-                      <BrainCircuit className="h-4 w-4 text-primary" />
-                      AI Provider Selection
-                    </h3>
-                    <RadioGroup defaultValue="openai" className="flex flex-col gap-3 sm:flex-row sm:gap-6">
-                      <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
-                        <RadioGroupItem value="openai" id="r-openai" />
-                        <Label htmlFor="r-openai" className="font-medium cursor-pointer">OpenAI (GPT-4o)</Label>
-                      </div>
-                      <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
-                        <RadioGroupItem value="anthropic" id="r-anthropic" />
-                        <Label htmlFor="r-anthropic" className="font-medium cursor-pointer">Anthropic (Claude 3.5 Sonnet)</Label>
-                      </div>
-                    </RadioGroup>
-                  </div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+                    <BrainCircuit className="h-4 w-4 text-primary" />
+                    AI Provider Selection
+                  </h3>
+                  <RadioGroup
+                    value={aiSettings?.provider ?? provider}
+                    onValueChange={(v) => setProvider(v as "openai" | "anthropic")}
+                    className="flex flex-col gap-3 sm:flex-row sm:gap-6"
+                  >
+                    <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
+                      <RadioGroupItem value="openai" id="r-openai" />
+                      <Label htmlFor="r-openai" className="font-medium cursor-pointer">OpenAI (GPT-4o)</Label>
+                    </div>
+                    <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
+                      <RadioGroupItem value="anthropic" id="r-anthropic" />
+                      <Label htmlFor="r-anthropic" className="font-medium cursor-pointer">Anthropic (Claude 3.5 Sonnet)</Label>
+                    </div>
+                  </RadioGroup>
                 </div>
 
+                {/* API Credentials */}
                 <div className="space-y-4 border-t border-border pt-6">
                   <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
                     <Key className="h-4 w-4 text-primary" />
@@ -343,16 +468,28 @@ export default function AdminPage() {
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="api-key">API Key</Label>
-                      <Input id="api-key" type="password" placeholder="sk-..." defaultValue="sk-dummy-key-for-mockup" />
-                      <p className="text-xs text-muted-foreground">Keys are encrypted before storage.</p>
+                      <Input
+                        id="api-key"
+                        type="password"
+                        placeholder={aiSettings?.hasApiKey ? "••••••••••••  (stored)" : "sk-..."}
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">Leave blank to keep existing key.</p>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="org-id">Organization ID (Optional)</Label>
-                      <Input id="org-id" placeholder="org-..." />
+                      <Input
+                        id="org-id"
+                        placeholder="org-..."
+                        value={orgId}
+                        onChange={(e) => setOrgId(e.target.value)}
+                      />
                     </div>
                   </div>
                 </div>
 
+                {/* Generation Preferences */}
                 <div className="space-y-4 border-t border-border pt-6">
                   <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
                     <FileText className="h-4 w-4 text-primary" />
@@ -361,21 +498,117 @@ export default function AdminPage() {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label htmlFor="system-prompt">Default System Prompt</Label>
-                      <Textarea 
-                        id="system-prompt" 
+                      <Textarea
+                        id="system-prompt"
                         className="h-24 resize-none"
-                        defaultValue="You are an expert project manager at Flipside Group. Draft comprehensive project governance documents based on the provided intake form details. Maintain a professional, consulting-grade tone."
+                        value={systemPrompt || aiSettings?.systemPrompt || ""}
+                        onChange={(e) => setSystemPrompt(e.target.value)}
                       />
                       <p className="text-xs text-muted-foreground">
                         This instruction is prefixed to all document generation requests.
                       </p>
                     </div>
-                    
                     <div className="space-y-2">
-                      <Label htmlFor="company-name">Company Name context</Label>
-                      <Input id="company-name" defaultValue="Flipside Group" />
+                      <Label htmlFor="company-name">Company Name</Label>
+                      <Input
+                        id="company-name"
+                        value={companyName || aiSettings?.companyName || ""}
+                        onChange={(e) => setCompanyName(e.target.value)}
+                      />
                     </div>
                   </div>
+                </div>
+
+                {/* Training Document */}
+                <div className="space-y-4 border-t border-border pt-6">
+                  <div>
+                    <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
+                      <BookOpen className="h-4 w-4 text-primary" />
+                      Template Training Document
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Upload a plain-text document defining how your governance templates should be completed — examples, field definitions, and standards. This is injected into every generation prompt.
+                    </p>
+                  </div>
+
+                  {aiSettings?.trainingDocFilename ? (
+                    // Document is uploaded — show status card
+                    <div className="rounded-lg border border-border bg-muted/40 p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">
+                              {aiSettings.trainingDocFilename}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatDocSize(aiSettings.trainingDocSize)} · Uploaded {formatDocDate(aiSettings.trainingDocUploadedAt)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => setShowDocContent((p) => !p)}
+                          >
+                            {showDocContent ? <EyeOff className="h-3.5 w-3.5 mr-1" /> : <Eye className="h-3.5 w-3.5 mr-1" />}
+                            {showDocContent ? "Hide" : "Preview"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => trainingDocInputRef.current?.click()}
+                            disabled={uploadTrainingDocMutation.isPending}
+                          >
+                            <UploadCloud className="h-3.5 w-3.5 mr-1" />
+                            Replace
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                            onClick={() => deleteTrainingDocMutation.mutate()}
+                            disabled={deleteTrainingDocMutation.isPending}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      {showDocContent && docContentPreview && (
+                        <Textarea
+                          readOnly
+                          value={docContentPreview}
+                          className="h-56 text-xs font-mono resize-none bg-background border-border"
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    // No document — show upload zone
+                    <div
+                      className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 text-center cursor-pointer hover:bg-muted/40 transition-colors"
+                      onClick={() => trainingDocInputRef.current?.click()}
+                    >
+                      <UploadCloud className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                      <p className="text-sm font-medium text-foreground">
+                        {uploadTrainingDocMutation.isPending ? "Uploading…" : "Upload training document"}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Plain text (.txt, .md) files supported · Max recommended 50 KB
+                      </p>
+                    </div>
+                  )}
+
+                  <input
+                    ref={trainingDocInputRef}
+                    type="file"
+                    accept=".txt,.md"
+                    className="hidden"
+                    onChange={handleTrainingDocFileChange}
+                  />
                 </div>
               </div>
             </SectionCard>
