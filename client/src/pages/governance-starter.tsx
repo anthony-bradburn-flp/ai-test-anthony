@@ -129,8 +129,7 @@ export default function GovernanceStarterPage() {
     name: "billingMilestones",
   });
 
-  const onSubmit = (values: FormValues) => {
-    // Merge sponsor index into stakeholders array for output
+  const onSubmit = async (values: FormValues) => {
     const payload = {
       client: values.client,
       sheetRef: values.sheetRef,
@@ -152,10 +151,23 @@ export default function GovernanceStarterPage() {
       uploadedFiles: uploads.map((f) => f.name),
     };
 
-    console.log("Submitted payload:", payload);
-    toast.success("Form submitted successfully", {
-      description: "Check console for payload JSON.",
-    });
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Generation request failed");
+      const result = await res.json();
+      console.log("Generation context:", result);
+      toast.success("Documents queued for generation", {
+        description: result.trainingDocAttached
+          ? "Training document standards will be applied."
+          : "No training document attached — configure one in Admin > AI Settings.",
+      });
+    } catch {
+      toast.error("Failed to submit", { description: "Check the console for details." });
+    }
   };
 
   const handleReset = () => {
