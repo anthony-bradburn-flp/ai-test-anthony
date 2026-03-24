@@ -6,6 +6,22 @@ import { createServer } from "http";
 const app = express();
 const httpServer = createServer(app);
 
+const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || "pm-governance";
+const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS || "flipside-pm";
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const auth = req.headers.authorization;
+  if (auth && auth.startsWith("Basic ")) {
+    const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
+    const [user, pass] = decoded.split(":");
+    if (user === BASIC_AUTH_USER && pass === BASIC_AUTH_PASS) {
+      return next();
+    }
+  }
+  res.setHeader("WWW-Authenticate", 'Basic realm="Restricted"');
+  res.status(401).send("Unauthorized");
+});
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
