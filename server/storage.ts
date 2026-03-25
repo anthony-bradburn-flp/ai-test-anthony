@@ -1,5 +1,14 @@
 import { type User, type InsertUser } from "@shared/schema";
 import { randomUUID } from "crypto";
+import bcrypt from "bcryptjs";
+
+export async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12);
+}
+
+export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  return bcrypt.compare(password, hash);
+}
 
 // modify the interface with any CRUD methods
 // you might need
@@ -59,8 +68,14 @@ export class MemStorage implements IStorage {
   constructor() {
     this.users = new Map();
     this.aiSettings = { ...DEFAULT_AI_SETTINGS };
-    // Seed initial admin user
-    this.createUser({ username: "admin", password: "governance-admin" });
+    // Seed initial admin user with hashed password
+    const adminPassword = process.env.ADMIN_PASSWORD || "governance-admin";
+    if (!process.env.ADMIN_PASSWORD) {
+      console.warn("[WARN] ADMIN_PASSWORD env var not set — using default. Change this in production.");
+    }
+    hashPassword(adminPassword).then((hash) => {
+      this.createUser({ username: "admin", password: hash });
+    });
   }
 
   async getUser(id: string): Promise<User | undefined> {
