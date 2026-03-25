@@ -89,7 +89,8 @@ type AiSettingsResponse = {
   orgId: string;
   systemPrompt: string;
   companyName: string;
-  hasApiKey: boolean;
+  hasOpenAIKey: boolean;
+  hasAnthropicKey: boolean;
   trainingDocFilename: string | null;
   trainingDocUploadedAt: string | null;
   trainingDocSize: number | null;
@@ -163,7 +164,6 @@ export default function AdminPage() {
   // AI Settings state
   const queryClient = useQueryClient();
   const [provider, setProvider] = useState<"openai" | "anthropic">("openai");
-  const [apiKey, setApiKey] = useState("");
   const [orgId, setOrgId] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [companyName, setCompanyName] = useState("");
@@ -500,7 +500,6 @@ export default function AdminPage() {
   const saveSettingsMutation = useMutation({
     mutationFn: async () => {
       const body: Record<string, string> = { provider, orgId, systemPrompt, companyName };
-      if (apiKey) body.apiKey = apiKey;
       const res = await fetch("/api/admin/ai-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1135,27 +1134,30 @@ export default function AdminPage() {
                   </h3>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <Label htmlFor="api-key">API Key</Label>
-                      <Input
-                        id="api-key"
-                        type="password"
-                        placeholder={aiSettings?.hasApiKey ? "••••••••••••  (stored)" : "sk-..."}
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        disabled={!isAdmin}
-                      />
-                      <p className="text-xs text-muted-foreground">Leave blank to keep existing key.</p>
+                      <Label>OpenAI API Key</Label>
+                      <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${aiSettings?.hasOpenAIKey ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
+                        <span className={`h-2 w-2 rounded-full flex-shrink-0 ${aiSettings?.hasOpenAIKey ? "bg-green-500" : "bg-amber-400"}`} />
+                        {aiSettings?.hasOpenAIKey ? "Configured via environment variable" : "Not set — add OPENAI_API_KEY to server .env"}
+                      </div>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="org-id">Organization ID (Optional)</Label>
-                      <Input
-                        id="org-id"
-                        placeholder="org-..."
-                        value={orgId}
-                        onChange={(e) => setOrgId(e.target.value)}
-                        disabled={!isAdmin}
-                      />
+                      <Label>Anthropic API Key</Label>
+                      <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${aiSettings?.hasAnthropicKey ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
+                        <span className={`h-2 w-2 rounded-full flex-shrink-0 ${aiSettings?.hasAnthropicKey ? "bg-green-500" : "bg-amber-400"}`} />
+                        {aiSettings?.hasAnthropicKey ? "Configured via environment variable" : "Not set — add ANTHROPIC_API_KEY to server .env"}
+                      </div>
                     </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">API keys are managed securely via server environment variables and are never stored in the database or visible in the UI.</p>
+                  <div className="space-y-2">
+                    <Label htmlFor="org-id">OpenAI Organization ID <span className="font-normal text-muted-foreground">(Optional)</span></Label>
+                    <Input
+                      id="org-id"
+                      placeholder="org-..."
+                      value={orgId}
+                      onChange={(e) => setOrgId(e.target.value)}
+                      disabled={!isAdmin}
+                    />
                   </div>
                 </div>
 

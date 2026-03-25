@@ -99,22 +99,26 @@ export async function registerRoutes(
 
   app.get("/api/admin/ai-settings", requireAuth, async (_req, res) => {
     const settings = await storage.getAiSettings();
-    // Never expose the API key in GET responses
-    const { apiKey: _key, ...safeSettings } = settings;
-    res.json({ ...safeSettings, hasApiKey: !!_key });
+    res.json({
+      ...settings,
+      hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+      hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+    });
   });
 
   app.post("/api/admin/ai-settings", requireAdmin, async (req, res) => {
-    const { provider, apiKey, orgId, systemPrompt, companyName } = req.body;
+    const { provider, orgId, systemPrompt, companyName } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
-      ...(apiKey && { apiKey }),
       ...(orgId !== undefined && { orgId }),
       ...(systemPrompt !== undefined && { systemPrompt }),
       ...(companyName !== undefined && { companyName }),
     });
-    const { apiKey: _key, ...safeSettings } = updated;
-    res.json({ ...safeSettings, hasApiKey: !!_key });
+    res.json({
+      ...updated,
+      hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+      hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+    });
   });
 
   // --- Training Document ---
@@ -356,8 +360,11 @@ export async function registerRoutes(
     const settings = await storage.getAiSettings();
     const projectData = parsed.data;
 
-    if (!settings.apiKey) {
-      res.status(400).json({ error: "No API key configured. Add one in Admin > AI Settings." });
+    const activeKey = settings.provider === "anthropic"
+      ? process.env.ANTHROPIC_API_KEY
+      : process.env.OPENAI_API_KEY;
+    if (!activeKey) {
+      res.status(400).json({ error: `No ${settings.provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"} environment variable set on the server.` });
       return;
     }
 
@@ -379,7 +386,7 @@ export async function registerRoutes(
       let aiContent: string;
 
       if (settings.provider === "anthropic") {
-        const client = new Anthropic({ apiKey: settings.apiKey });
+        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
         const message = await client.messages.create({
           model: "claude-sonnet-4-6",
           max_tokens: 8192,
@@ -388,7 +395,7 @@ export async function registerRoutes(
         });
         aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
       } else {
-        const client = new OpenAI({ apiKey: settings.apiKey, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+        const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, ...(settings.orgId ? { organization: settings.orgId } : {}) });
         const completion = await client.chat.completions.create({
           model: "gpt-4o",
           max_tokens: 8192,
