@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useLogout } from "@/hooks/use-auth";
 import { Link } from "wouter";
 import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Key, BrainCircuit, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -93,6 +94,7 @@ type AiSettingsResponse = {
 };
 
 export default function AdminPage() {
+  const logout = useLogout();
   const [templates, setTemplates] = useState(INITIAL_TEMPLATES);
   const [packages, setPackages] = useState(INITIAL_PACKAGES);
   const [users, setUsers] = useState(INITIAL_USERS);
@@ -239,11 +241,16 @@ export default function AdminPage() {
               Manage governance document templates, project type packages, and users.
             </p>
           </div>
-          <Link href="/">
-            <Button variant="outline" className="font-bold">
-              Back to Form
+          <div className="flex items-center gap-2">
+            <Link href="/">
+              <Button variant="outline" className="font-bold">
+                Back to Form
+              </Button>
+            </Link>
+            <Button variant="ghost" className="font-bold" onClick={() => logout.mutate()}>
+              Sign Out
             </Button>
-          </Link>
+          </div>
         </div>
       </header>
 

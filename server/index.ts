@@ -1,7 +1,16 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+
+declare module "express-session" {
+  interface SessionData {
+    userId?: string;
+    username?: string;
+  }
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -27,6 +36,17 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+const SessionStore = MemoryStore(session);
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "admin-session-secret",
+    resave: false,
+    saveUninitialized: false,
+    store: new SessionStore({ checkPeriod: 86400000 }),
+    cookie: { httpOnly: true, maxAge: 86400000 },
+  }),
+);
 
 app.use(
   express.json({

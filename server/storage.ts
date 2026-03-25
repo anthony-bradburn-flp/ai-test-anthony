@@ -44,6 +44,8 @@ export class MemStorage implements IStorage {
   constructor() {
     this.users = new Map();
     this.aiSettings = { ...DEFAULT_AI_SETTINGS };
+    // Seed initial admin user
+    this.createUser({ username: "admin", password: "governance-admin" });
   }
 
   async getUser(id: string): Promise<User | undefined> {
