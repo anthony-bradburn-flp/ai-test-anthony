@@ -260,7 +260,7 @@ export default function AdminPage() {
   };
 
   // Template API
-  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string };
+  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number };
 
   const { data: templatesData, isLoading: templatesLoading } = useQuery<ApiTemplate[]>({
     queryKey: ["/api/admin/templates"],
@@ -320,6 +320,36 @@ export default function AdminPage() {
     },
     onError: () => toast.error("Failed to delete template"),
   });
+
+  const tplFileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingForTemplateId, setUploadingForTemplateId] = useState<string | null>(null);
+
+  const uploadTemplateFileMutation = useMutation({
+    mutationFn: async ({ id, file }: { id: string; file: File }) => {
+      const arrayBuffer = await file.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      const res = await fetch(`/api/admin/templates/${id}/file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileData: base64, originalFilename: file.name, fileSize: file.size }),
+      });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Upload failed"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/templates"] });
+      setUploadingForTemplateId(null);
+      toast.success("Template file uploaded");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const handleTplFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !uploadingForTemplateId) return;
+    uploadTemplateFileMutation.mutate({ id: uploadingForTemplateId, file });
+    e.target.value = "";
+  };
 
   const handleCreateTemplate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -805,14 +835,30 @@ export default function AdminPage() {
                     }
                     return (
                       <TableRow key={tpl.id}>
-                        <TableCell className="font-semibold flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-muted-foreground" />
-                          {tpl.name}
+                        <TableCell className="font-semibold">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <span>{tpl.name}</span>
+                          </div>
+                          {tpl.originalFilename && (
+                            <p className="text-xs text-emerald-600 mt-0.5 ml-6">
+                              ✓ {tpl.originalFilename} {tpl.fileSize ? `(${Math.round(tpl.fileSize / 1024)} KB)` : ""}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{tpl.type}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{tpl.lastUpdated}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost" size="sm"
+                              className="h-8 px-2 text-xs text-muted-foreground hover:text-primary"
+                              onClick={() => { setUploadingForTemplateId(tpl.id); tplFileInputRef.current?.click(); }}
+                              disabled={uploadTemplateFileMutation.isPending && uploadingForTemplateId === tpl.id}
+                            >
+                              <UploadCloud className="h-3.5 w-3.5 mr-1" />
+                              {tpl.originalFilename ? "Replace" : "Upload"}
+                            </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
                               onClick={() => { setEditingTemplateId(tpl.id); setEditTplName(tpl.name); setEditTplType(tpl.type); setShowAddTemplate(false); }}>
                               <Edit2 className="h-4 w-4" />
@@ -828,6 +874,13 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
+              <input
+                ref={tplFileInputRef}
+                type="file"
+                accept=".docx,.xlsx,.xls,.txt,.md"
+                className="hidden"
+                onChange={handleTplFileChange}
+              />
             </SectionCard>
           </TabsContent>
 

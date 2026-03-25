@@ -84,8 +84,13 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
+type GeneratedDocument = { name: string; filename: string; content: string };
+
 export default function GovernanceStarterPage() {
   const [uploads, setUploads] = useState<File[]>([]);
+  const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -136,37 +141,64 @@ export default function GovernanceStarterPage() {
       projectName: values.projectName,
       projectType: values.projectType,
       projectSize: values.projectSize,
-      valueGBP: Number(values.value),
-      sowStartDate: values.startDate,
-      sowEndDate: values.endDate,
+      value: values.value,
+      startDate: values.startDate,
+      endDate: values.endDate,
       billingMilestones: values.billingMilestones,
-      projectSummary: values.summary,
+      summary: values.summary,
       flipsideStakeholders: values.flipsideStakeholders,
-      clientStakeholders: values.clientStakeholders.map((s, idx) => ({
-        name: s.name,
-        role: s.role,
-        sponsor: values.sponsorIndex === idx,
-      })),
-      documentsRequired: values.docsRequired,
-      uploadedFiles: uploads.map((f) => f.name),
+      clientStakeholders: values.clientStakeholders,
+      sponsorIndex: values.sponsorIndex,
+      docsRequired: values.docsRequired,
     };
 
+    setIsGenerating(true);
+    setGeneratedDocs(null);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error("Generation request failed");
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "Generation request failed");
+      }
       const result = await res.json();
-      console.log("Generation context:", result);
-      toast.success("Documents queued for generation", {
+      setGeneratedDocs(result.documents ?? []);
+      toast.success("Documents generated", {
         description: result.trainingDocAttached
-          ? "Training document standards will be applied."
-          : "No training document attached — configure one in Admin > AI Settings.",
+          ? "Training document standards applied."
+          : "No training document — configure one in Admin > AI Settings.",
       });
+    } catch (e: unknown) {
+      toast.error("Failed to generate", { description: e instanceof Error ? e.message : "Check the console for details." });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!generatedDocs?.length) return;
+    setIsDownloading(true);
+    try {
+      const res = await fetch("/api/generate/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ documents: generatedDocs }),
+      });
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "governance-documents.zip";
+      a.click();
+      URL.revokeObjectURL(url);
     } catch {
-      toast.error("Failed to submit", { description: "Check the console for details." });
+      toast.error("Download failed");
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -840,14 +872,42 @@ export default function GovernanceStarterPage() {
                 <Button type="button" variant="outline" onClick={handleReset} className="font-bold">
                   Reset
                 </Button>
-                <Button type="submit" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground border-[#333333]">
-                  Generate documents
+                <Button type="submit" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isGenerating}>
+                  {isGenerating ? "Generating…" : "Generate documents"}
                 </Button>
               </div>
             </div>
 
           </form>
         </Form>
+
+        {isGenerating && (
+          <div className="mt-8 rounded-[14px] border border-border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
+            Generating documents — this may take up to a minute…
+          </div>
+        )}
+
+        {generatedDocs && generatedDocs.length > 0 && (
+          <div className="mt-8 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-foreground">Generated Documents</h2>
+              <Button onClick={handleDownload} disabled={isDownloading} className="font-bold">
+                {isDownloading ? "Preparing…" : "Download All (.zip)"}
+              </Button>
+            </div>
+            {generatedDocs.map((doc, i) => (
+              <div key={i} className="rounded-[14px] border border-border bg-card overflow-hidden">
+                <div className="border-b border-border bg-muted px-4 py-3 flex items-center justify-between">
+                  <span className="font-semibold text-sm text-foreground">{doc.name}</span>
+                  <span className="text-xs text-muted-foreground">{doc.filename}</span>
+                </div>
+                <pre className="p-4 text-xs text-foreground whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-background">
+                  {doc.content}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );

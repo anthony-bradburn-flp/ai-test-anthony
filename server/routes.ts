@@ -1,10 +1,20 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { join, extname } from "path";
 import nodemailer from "nodemailer";
 import rateLimit from "express-rate-limit";
+import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
+import JSZip from "jszip";
+import * as XLSX from "xlsx";
+import mammoth from "mammoth";
 import { storage, verifyPassword, hashPassword } from "./storage";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
+
+const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
+if (!existsSync(TEMPLATES_DIR)) mkdirSync(TEMPLATES_DIR, { recursive: true });
 
 const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -307,6 +317,26 @@ export async function registerRoutes(
     res.json(updated);
   });
 
+  app.post("/api/admin/templates/:id/file", requireAuth, async (req, res) => {
+    const { fileData, originalFilename, fileSize } = req.body;
+    if (!fileData || !originalFilename) {
+      res.status(400).json({ error: "fileData and originalFilename are required" });
+      return;
+    }
+    const template = await storage.getTemplate(req.params.id);
+    if (!template) { res.status(404).json({ error: "Template not found" }); return; }
+    const ext = extname(originalFilename).toLowerCase();
+    const filePath = join(TEMPLATES_DIR, `${req.params.id}${ext}`);
+    const buffer = Buffer.from(fileData, "base64");
+    if (buffer.length > 10 * 1024 * 1024) {
+      res.status(413).json({ error: "File too large (max 10 MB)" });
+      return;
+    }
+    writeFileSync(filePath, buffer);
+    const updated = await storage.updateTemplateFile(req.params.id, filePath, originalFilename, fileSize ?? buffer.length);
+    res.json(updated);
+  });
+
   app.delete("/api/admin/templates/:id", requireAuth, async (req, res) => {
     await storage.deleteTemplate(req.params.id);
     res.json({ ok: true });
@@ -326,26 +356,122 @@ export async function registerRoutes(
     const settings = await storage.getAiSettings();
     const projectData = parsed.data;
 
-    const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent);
+    if (!settings.apiKey) {
+      res.status(400).json({ error: "No API key configured. Add one in Admin > AI Settings." });
+      return;
+    }
+
+    // Load all templates and find files for the required documents
+    const allTemplates = await storage.listTemplates();
+    const templateContents: Array<{ name: string; content: string }> = [];
+    for (const docName of projectData.docsRequired) {
+      const tpl = allTemplates.find((t) => t.name === docName);
+      if (tpl?.filePath && existsSync(tpl.filePath)) {
+        const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
+        if (content) templateContents.push({ name: docName, content });
+      }
+    }
+
+    const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents);
     const userPrompt = buildUserPrompt(projectData);
 
-    // Return the assembled prompt for now; replace with AI SDK call once provider is wired.
-    res.json({
-      systemPrompt,
-      userPrompt,
-      projectData,
-      trainingDocAttached: !!settings.trainingDocContent,
-      provider: settings.provider,
-    });
+    try {
+      let aiContent: string;
+
+      if (settings.provider === "anthropic") {
+        const client = new Anthropic({ apiKey: settings.apiKey });
+        const message = await client.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 8192,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }],
+        });
+        aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
+      } else {
+        const client = new OpenAI({ apiKey: settings.apiKey, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+        const completion = await client.chat.completions.create({
+          model: "gpt-4o",
+          max_tokens: 8192,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        });
+        aiContent = completion.choices[0]?.message?.content ?? "";
+      }
+
+      // Parse structured JSON response from AI
+      const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
+      let documents: Array<{ name: string; filename: string; content: string }> = [];
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          documents = parsed.documents ?? [];
+        } catch {
+          // Fallback: treat entire response as a single document
+          documents = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, content: aiContent }];
+        }
+      } else {
+        documents = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, content: aiContent }];
+      }
+
+      res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "AI generation failed";
+      res.status(502).json({ error: message });
+    }
+  });
+
+  app.post("/api/generate/download", requireAuth, async (req, res) => {
+    const { documents } = req.body as { documents: Array<{ name: string; filename: string; content: string }> };
+    if (!Array.isArray(documents) || documents.length === 0) {
+      res.status(400).json({ error: "No documents provided" });
+      return;
+    }
+    const zip = new JSZip();
+    for (const doc of documents) {
+      zip.file(doc.filename.endsWith(".txt") ? doc.filename : doc.filename.replace(/\.[^.]+$/, ".txt"), doc.content);
+    }
+    const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="governance-documents.zip"`);
+    res.send(zipBuffer);
   });
 
   return httpServer;
 }
 
+async function extractFileContent(filePath: string, originalFilename: string): Promise<string> {
+  const ext = extname(originalFilename).toLowerCase();
+  try {
+    if (ext === ".docx") {
+      const buffer = readFileSync(filePath);
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value;
+    }
+    if (ext === ".xlsx" || ext === ".xls") {
+      const workbook = XLSX.readFile(filePath);
+      const lines: string[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        lines.push(`=== Sheet: ${sheetName} ===`);
+        lines.push(XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]));
+      }
+      return lines.join("\n");
+    }
+    if (ext === ".txt" || ext === ".md") {
+      return readFileSync(filePath, "utf8");
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 function buildSystemPrompt(
   basePrompt: string,
   companyName: string,
-  trainingDocContent: string | null
+  trainingDocContent: string | null,
+  templateContents: Array<{ name: string; content: string }> = []
 ): string {
   let prompt = basePrompt.replace(/Flipside Group/g, companyName);
 
@@ -353,6 +479,15 @@ function buildSystemPrompt(
 
   if (trainingDocContent) {
     prompt += `\n\n<TRAINING_DOCUMENT>\n${trainingDocContent}\n</TRAINING_DOCUMENT>`;
+  }
+
+  if (templateContents.length > 0) {
+    prompt += `\n\nYou must generate one populated document for each template listed below. Return your response as valid JSON in this exact format:\n\`\`\`json\n{"documents":[{"name":"Template Name","filename":"SheetRef_Client_TemplateName.txt","content":"...full populated content..."}]}\n\`\`\`\n\nDo not include any text outside the JSON block.`;
+    for (const tpl of templateContents) {
+      prompt += `\n\n<TEMPLATE name="${tpl.name}">\n${tpl.content}\n</TEMPLATE>`;
+    }
+  } else if (templateContents.length === 0) {
+    prompt += `\n\nReturn your response as valid JSON in this exact format:\n\`\`\`json\n{"documents":[{"name":"Document Name","filename":"SheetRef_Client_DocumentName.txt","content":"...full populated content..."}]}\n\`\`\`\n\nGenerate one document entry per item in the Documents Required list. Do not include any text outside the JSON block.`;
   }
 
   return prompt;
