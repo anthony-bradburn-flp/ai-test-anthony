@@ -9,28 +9,28 @@
 
   --radius: 12px;
 
-  /* Brand Colors: 
+  /* Brand Colors:
      Primary #141414 (hsl(0, 0%, 8%))
      Secondary #ffffff (hsl(0, 0%, 100%))
-     Tertiary #ED1442 (hsl(347, 88%, 50%)) 
+     Tertiary #ED1442 (hsl(347, 88%, 50%))
   */
-  --background: 0 0% 8%; 
-  --foreground: 0 0% 100%;
+  --background: 0 0% 100%;
+  --foreground: 0 0% 5%;
 
-  --card: 0 0% 11%;
-  --card-foreground: 0 0% 100%;
+  --card: 0 0% 98%;
+  --card-foreground: 0 0% 5%;
 
-  --popover: 0 0% 11%;
-  --popover-foreground: 0 0% 100%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 5%;
 
   --primary: 347 88% 50%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 0 0% 15%;
-  --secondary-foreground: 0 0% 100%;
+  --secondary: 0 0% 94%;
+  --secondary-foreground: 0 0% 5%;
 
-  --muted: 0 0% 18%;
-  --muted-foreground: 0 0% 65%;
+  --muted: 0 0% 94%;
+  --muted-foreground: 0 0% 40%;
 
   --accent: 347 88% 50%;
   --accent-foreground: 0 0% 100%;
@@ -38,28 +38,30 @@
   --destructive: 347 88% 50%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 0 0% 20%;
-  --input: 0 0% 20%;
+  --border: 0 0% 85%;
+  --input: 0 0% 85%;
   --ring: 347 88% 50%;
 
+  --button-outline: hsl(347, 88%, 50%);
+
   --chart-1: 347 88% 50%;
-  --chart-2: 0 0% 100%;
+  --chart-2: 0 0% 5%;
   --chart-3: 0 0% 40%;
   --chart-4: 0 0% 60%;
   --chart-5: 0 0% 80%;
 
-  --sidebar: 0 0% 11%;
-  --sidebar-foreground: 0 0% 100%;
-  --sidebar-border: 0 0% 20%;
+  --sidebar: 0 0% 96%;
+  --sidebar-foreground: 0 0% 5%;
+  --sidebar-border: 0 0% 85%;
   --sidebar-primary: 347 88% 50%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 0 0% 15%;
-  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-accent: 0 0% 90%;
+  --sidebar-accent-foreground: 0 0% 5%;
   --sidebar-ring: 347 88% 50%;
 }
 
 .dark {
-  --background: 0 0% 8%; 
+  --background: 0 0% 8%;
   --foreground: 0 0% 100%;
 
   --card: 0 0% 11%;
@@ -86,6 +88,8 @@
   --border: 0 0% 20%;
   --input: 0 0% 20%;
   --ring: 347 88% 50%;
+
+  --button-outline: hsl(347, 88%, 50%);
 }
 
 @theme inline {
@@ -131,7 +135,7 @@
   }
 
   html {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   body {
