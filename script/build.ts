@@ -24,7 +24,6 @@ const allowlist = [
   "nanoid",
   "@anthropic-ai/sdk",
   "jszip",
-  "mammoth",
   "nodemailer",
   "nodemailer/lib/dkim",
   "openai",
@@ -34,7 +33,6 @@ const allowlist = [
   "stripe",
   "uuid",
   "ws",
-  "xlsx",
   "zod",
   "zod-validation-error",
 ];
