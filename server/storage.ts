@@ -62,6 +62,7 @@ export interface IStorage {
   listUsers(): Promise<SafeUser[]>;
   deleteUser(id: string): Promise<void>;
   updateUserPassword(id: string, hashedPassword: string): Promise<void>;
+  updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined>;
   getAiSettings(): Promise<AiSettings>;
   updateAiSettings(settings: Partial<AiSettings>): Promise<AiSettings>;
 }
@@ -117,6 +118,15 @@ export class MemStorage implements IStorage {
   async updateUserPassword(id: string, hashedPassword: string): Promise<void> {
     const user = this.users.get(id);
     if (user) this.users.set(id, { ...user, password: hashedPassword });
+  }
+
+  async updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    const updated = { ...user, ...fields };
+    this.users.set(id, updated);
+    const { password: _, ...safe } = updated;
+    return safe;
   }
 
   async getAiSettings(): Promise<AiSettings> {

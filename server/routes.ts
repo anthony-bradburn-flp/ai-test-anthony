@@ -179,10 +179,46 @@ export async function registerRoutes(
     res.status(201).json(safeUser);
   });
 
+  app.patch("/api/admin/users/:id", requireAuth, async (req, res) => {
+    const target = await storage.getUser(req.params.id);
+    if (!target) { res.status(404).json({ error: "User not found" }); return; }
+    const callerRole = req.session.role;
+    if (callerRole !== "admin") {
+      if (target.role !== "manager") {
+        res.status(403).json({ error: "Managers can only edit manager users" });
+        return;
+      }
+      if (req.body.role && req.body.role !== "manager") {
+        res.status(403).json({ error: "Managers cannot assign the admin role" });
+        return;
+      }
+    }
+    const { username, email, role, password } = req.body;
+    if (username && username !== target.username) {
+      const existing = await storage.getUserByUsername(username);
+      if (existing) { res.status(409).json({ error: "Username already exists" }); return; }
+    }
+    const updated = await storage.updateUser(req.params.id, {
+      ...(username ? { username } : {}),
+      ...(email !== undefined ? { email: email || null } : {}),
+      ...(role ? { role } : {}),
+    });
+    if (password) {
+      const hashed = await hashPassword(password);
+      await storage.updateUserPassword(req.params.id, hashed);
+    }
+    res.json(updated);
+  });
+
   app.delete("/api/admin/users/:id", requireAuth, async (req, res) => {
-    // Prevent self-deletion
     if (req.params.id === req.session.userId) {
       res.status(400).json({ error: "Cannot delete your own account" });
+      return;
+    }
+    const target = await storage.getUser(req.params.id);
+    if (!target) { res.status(404).json({ error: "User not found" }); return; }
+    if (req.session.role !== "admin" && target.role !== "manager") {
+      res.status(403).json({ error: "Managers can only delete manager users" });
       return;
     }
     await storage.deleteUser(req.params.id);
