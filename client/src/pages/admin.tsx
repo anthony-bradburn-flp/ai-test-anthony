@@ -347,11 +347,29 @@ export default function AdminPage() {
     onError: (err: Error) => toast.error(err.message),
   });
 
+  const ALLOWED_EXTENSIONS = [".docx", ".xlsx", ".xls", ".txt", ".md"];
+  const MAX_FILE_SIZE_MB = 20;
+
   const handleTplFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !uploadingForTemplateId) return;
-    uploadTemplateFileMutation.mutate({ id: uploadingForTemplateId, file });
     e.target.value = "";
+    if (!file || !uploadingForTemplateId) return;
+
+    const ext = "." + file.name.split(".").pop()?.toLowerCase();
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      toast.error(`Unsupported file type "${ext}". Allowed types: ${ALLOWED_EXTENSIONS.join(", ")}`);
+      setUploadingForTemplateId(null);
+      return;
+    }
+
+    const sizeMB = file.size / (1024 * 1024);
+    if (sizeMB > MAX_FILE_SIZE_MB) {
+      toast.error(`File too large (${sizeMB.toFixed(1)} MB). Maximum allowed size is ${MAX_FILE_SIZE_MB} MB.`);
+      setUploadingForTemplateId(null);
+      return;
+    }
+
+    uploadTemplateFileMutation.mutate({ id: uploadingForTemplateId, file });
   };
 
   const handleCreateTemplate = (e: React.FormEvent) => {
