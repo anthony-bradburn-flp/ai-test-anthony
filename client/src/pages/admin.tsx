@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import mammoth from "mammoth/mammoth.browser";
-import { useLogout } from "@/hooks/use-auth";
+import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
 import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Key, BrainCircuit, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -28,6 +28,13 @@ import {
 } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+type ApiUser = {
+  id: string;
+  username: string;
+  email: string | null;
+  role: string;
+};
 
 // Mock Data
 const INITIAL_TEMPLATES = [
@@ -77,12 +84,6 @@ const INITIAL_PACKAGES = [
   }
 ];
 
-const INITIAL_USERS = [
-  { id: "u1", name: "Alice Morgan", email: "alice@flipsidegroup.com", role: "Admin", status: "Active" },
-  { id: "u2", name: "Bob Chen", email: "bob@flipsidegroup.com", role: "Editor", status: "Active" },
-  { id: "u3", name: "Charlie Davis", email: "charlie@flipsidegroup.com", role: "Viewer", status: "Inactive" },
-];
-
 type AiSettingsResponse = {
   provider: "openai" | "anthropic";
   orgId: string;
@@ -96,9 +97,17 @@ type AiSettingsResponse = {
 
 export default function AdminPage() {
   const logout = useLogout();
-  const [templates, setTemplates] = useState(INITIAL_TEMPLATES);
-  const [packages, setPackages] = useState(INITIAL_PACKAGES);
-  const [users, setUsers] = useState(INITIAL_USERS);
+  const { user: currentUser } = useAuth();
+  const isAdmin = currentUser?.role === "admin";
+  const [templates] = useState(INITIAL_TEMPLATES);
+  const [packages] = useState(INITIAL_PACKAGES);
+
+  // Add User form state
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [newUsername, setNewUsername] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newRole, setNewRole] = useState<"admin" | "manager">("manager");
 
   // AI Settings state
   const queryClient = useQueryClient();
@@ -110,6 +119,66 @@ export default function AdminPage() {
   const [showDocContent, setShowDocContent] = useState(false);
   const [docContentPreview, setDocContentPreview] = useState<string | null>(null);
   const trainingDocInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: usersData, isLoading: usersLoading } = useQuery<ApiUser[]>({
+    queryKey: ["/api/admin/users"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/users");
+      if (!res.ok) throw new Error("Failed to load users");
+      return res.json();
+    },
+  });
+
+  const createUserMutation = useMutation({
+    mutationFn: async (data: { username: string; password: string; email?: string; role: "admin" | "manager" }) => {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to create user");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setShowAddUser(false);
+      setNewUsername("");
+      setNewEmail("");
+      setNewPassword("");
+      setNewRole("manager");
+      toast.success("User created");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/users/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to delete user");
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast.success("User deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const handleCreateUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUsername.trim() || !newPassword.trim()) return;
+    createUserMutation.mutate({
+      username: newUsername.trim(),
+      password: newPassword,
+      ...(newEmail.trim() ? { email: newEmail.trim() } : {}),
+      role: newRole,
+    });
+  };
 
   const { data: aiSettings } = useQuery<AiSettingsResponse>({
     queryKey: ["/api/admin/ai-settings"],
@@ -382,51 +451,111 @@ export default function AdminPage() {
               title="User Management"
               description="Manage access and roles for the admin dashboard and governance platform."
               action={
-                <Button size="sm" className="font-bold bg-primary text-primary-foreground">
-                  <UserPlus className="h-4 w-4 mr-1" /> Add User
-                </Button>
+                !showAddUser && (
+                  <Button size="sm" className="font-bold bg-primary text-primary-foreground" onClick={() => setShowAddUser(true)}>
+                    <UserPlus className="h-4 w-4 mr-1" /> Add User
+                  </Button>
+                )
               }
             >
+              {showAddUser && (
+                <form onSubmit={handleCreateUser} className="p-5 border-b border-border space-y-4 bg-muted/20">
+                  <h3 className="text-sm font-semibold">New User</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-username">Username <span className="text-destructive">*</span></Label>
+                      <Input
+                        id="new-username"
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                        placeholder="username"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-email">Email</Label>
+                      <Input
+                        id="new-email"
+                        type="email"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        placeholder="user@example.com"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-password">Password <span className="text-destructive">*</span></Label>
+                      <Input
+                        id="new-password"
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Temporary password"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Role</Label>
+                      <RadioGroup
+                        value={newRole}
+                        onValueChange={(v) => setNewRole(v as "admin" | "manager")}
+                        className="flex gap-4 pt-1"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="manager" id="role-manager" />
+                          <Label htmlFor="role-manager" className="font-normal cursor-pointer">Manager</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="admin" id="role-admin" />
+                          <Label htmlFor="role-admin" className="font-normal cursor-pointer">Admin</Label>
+                        </div>
+                      </RadioGroup>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" size="sm" className="font-bold" disabled={createUserMutation.isPending}>
+                      {createUserMutation.isPending ? "Creating…" : "Create User"}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setShowAddUser(false)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              )}
               <Table>
                 <TableHeader className="bg-muted">
                   <TableRow>
-                    <TableHead className="font-bold text-foreground">Name</TableHead>
+                    <TableHead className="font-bold text-foreground">Username</TableHead>
                     <TableHead className="font-bold text-foreground">Email</TableHead>
                     <TableHead className="font-bold text-foreground">Role</TableHead>
-                    <TableHead className="font-bold text-foreground">Status</TableHead>
                     <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {users.map((user) => (
-                    <TableRow key={user.id}>
-                      <TableCell className="font-semibold">{user.name}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{user.email}</TableCell>
+                  {usersLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell>
+                    </TableRow>
+                  ) : usersData?.map((u) => (
+                    <TableRow key={u.id}>
+                      <TableCell className="font-semibold">{u.username}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{u.email ?? "—"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="font-medium bg-background">
-                          {user.role}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge 
-                          variant="secondary" 
-                          className={cn(
-                            "text-xs font-medium border-border",
-                            user.status === "Active" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"
-                          )}
-                        >
-                          {user.status}
+                        <Badge variant="outline" className={cn("font-medium bg-background capitalize", u.role === "admin" && "border-primary text-primary")}>
+                          {u.role}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive">
+                        {u.id !== currentUser?.username && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={() => deleteUserMutation.mutate(u.id)}
+                            disabled={deleteUserMutation.isPending}
+                          >
                             <Trash2 className="h-4 w-4" />
                           </Button>
-                        </div>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -438,17 +567,19 @@ export default function AdminPage() {
           <TabsContent value="settings" className="space-y-6">
             <SectionCard
               title="AI Generation Configuration"
-              description="Configure the AI provider used to automatically draft governance documents."
+              description={isAdmin ? "Configure the AI provider used to automatically draft governance documents." : "View-only — contact an admin to change AI settings."}
               action={
-                <Button
-                  size="sm"
-                  className="font-bold bg-primary text-primary-foreground"
-                  onClick={() => saveSettingsMutation.mutate()}
-                  disabled={saveSettingsMutation.isPending}
-                >
-                  <Save className="h-4 w-4 mr-1" />
-                  {saveSettingsMutation.isPending ? "Saving…" : "Save Settings"}
-                </Button>
+                isAdmin ? (
+                  <Button
+                    size="sm"
+                    className="font-bold bg-primary text-primary-foreground"
+                    onClick={() => saveSettingsMutation.mutate()}
+                    disabled={saveSettingsMutation.isPending}
+                  >
+                    <Save className="h-4 w-4 mr-1" />
+                    {saveSettingsMutation.isPending ? "Saving…" : "Save Settings"}
+                  </Button>
+                ) : undefined
               }
             >
               <div className="p-5 space-y-8">
@@ -460,7 +591,7 @@ export default function AdminPage() {
                   </h3>
                   <RadioGroup
                     value={aiSettings?.provider ?? provider}
-                    onValueChange={(v) => setProvider(v as "openai" | "anthropic")}
+                    onValueChange={(v) => isAdmin && setProvider(v as "openai" | "anthropic")}
                     className="flex flex-col gap-3 sm:flex-row sm:gap-6"
                   >
                     <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
@@ -489,6 +620,7 @@ export default function AdminPage() {
                         placeholder={aiSettings?.hasApiKey ? "••••••••••••  (stored)" : "sk-..."}
                         value={apiKey}
                         onChange={(e) => setApiKey(e.target.value)}
+                        disabled={!isAdmin}
                       />
                       <p className="text-xs text-muted-foreground">Leave blank to keep existing key.</p>
                     </div>
@@ -499,6 +631,7 @@ export default function AdminPage() {
                         placeholder="org-..."
                         value={orgId}
                         onChange={(e) => setOrgId(e.target.value)}
+                        disabled={!isAdmin}
                       />
                     </div>
                   </div>
@@ -518,6 +651,7 @@ export default function AdminPage() {
                         className="h-24 resize-none"
                         value={systemPrompt || aiSettings?.systemPrompt || ""}
                         onChange={(e) => setSystemPrompt(e.target.value)}
+                        disabled={!isAdmin}
                       />
                       <p className="text-xs text-muted-foreground">
                         This instruction is prefixed to all document generation requests.
@@ -529,6 +663,7 @@ export default function AdminPage() {
                         id="company-name"
                         value={companyName || aiSettings?.companyName || ""}
                         onChange={(e) => setCompanyName(e.target.value)}
+                        disabled={!isAdmin}
                       />
                     </div>
                   </div>
@@ -571,6 +706,7 @@ export default function AdminPage() {
                             {showDocContent ? <EyeOff className="h-3.5 w-3.5 mr-1" /> : <Eye className="h-3.5 w-3.5 mr-1" />}
                             {showDocContent ? "Hide" : "Preview"}
                           </Button>
+                          {isAdmin && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -581,12 +717,13 @@ export default function AdminPage() {
                             <UploadCloud className="h-3.5 w-3.5 mr-1" />
                             Replace
                           </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="sm"
                             className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                             onClick={() => deleteTrainingDocMutation.mutate()}
-                            disabled={deleteTrainingDocMutation.isPending}
+                            disabled={deleteTrainingDocMutation.isPending || !isAdmin}
                           >
                             <X className="h-3.5 w-3.5" />
                           </Button>
@@ -604,8 +741,8 @@ export default function AdminPage() {
                   ) : (
                     // No document — show upload zone
                     <div
-                      className="rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 text-center cursor-pointer hover:bg-muted/40 transition-colors"
-                      onClick={() => trainingDocInputRef.current?.click()}
+                      className={cn("rounded-lg border-2 border-dashed border-border bg-muted/20 p-6 text-center transition-colors", isAdmin ? "cursor-pointer hover:bg-muted/40" : "opacity-60 cursor-not-allowed")}
+                      onClick={() => isAdmin && trainingDocInputRef.current?.click()}
                     >
                       <UploadCloud className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
                       <p className="text-sm font-medium text-foreground">

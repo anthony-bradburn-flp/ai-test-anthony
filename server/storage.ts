@@ -53,10 +53,15 @@ Execution Process:
   trainingDocSize: null,
 };
 
+export type SafeUser = Omit<User, "password">;
+
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  listUsers(): Promise<SafeUser[]>;
+  deleteUser(id: string): Promise<void>;
+  updateUserPassword(id: string, hashedPassword: string): Promise<void>;
   getAiSettings(): Promise<AiSettings>;
   updateAiSettings(settings: Partial<AiSettings>): Promise<AiSettings>;
 }
@@ -74,7 +79,7 @@ export class MemStorage implements IStorage {
       console.warn("[WARN] ADMIN_PASSWORD env var not set — using default. Change this in production.");
     }
     hashPassword(adminPassword).then((hash) => {
-      this.createUser({ username: "admin", password: hash });
+      this.createUser({ username: "admin", password: hash, role: "admin" });
     });
   }
 
@@ -90,9 +95,28 @@ export class MemStorage implements IStorage {
 
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
+    const user: User = {
+      id,
+      username: insertUser.username,
+      password: insertUser.password,
+      email: insertUser.email ?? null,
+      role: insertUser.role ?? "manager",
+    };
     this.users.set(id, user);
     return user;
+  }
+
+  async listUsers(): Promise<SafeUser[]> {
+    return Array.from(this.users.values()).map(({ password: _, ...rest }) => rest);
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    this.users.delete(id);
+  }
+
+  async updateUserPassword(id: string, hashedPassword: string): Promise<void> {
+    const user = this.users.get(id);
+    if (user) this.users.set(id, { ...user, password: hashedPassword });
   }
 
   async getAiSettings(): Promise<AiSettings> {

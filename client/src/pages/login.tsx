@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Link, Redirect } from "wouter";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,8 +11,24 @@ import { useAuth, useLogin } from "@/hooks/use-auth";
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [view, setView] = useState<"login" | "forgot">("login");
+  const [forgotUsername, setForgotUsername] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
   const { user, isLoading } = useAuth();
   const login = useLogin();
+
+  const forgotPassword = useMutation({
+    mutationFn: async (u: string) => {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: u }),
+      });
+      const data = await res.json();
+      return data.message as string;
+    },
+    onSuccess: (msg) => setForgotMessage(msg),
+  });
 
   if (isLoading) return null;
   if (user) return <Redirect to="/admin" />;
@@ -19,6 +36,12 @@ export default function LoginPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     login.mutate({ username, password });
+  };
+
+  const handleForgotSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotUsername.trim()) return;
+    forgotPassword.mutate(forgotUsername.trim());
   };
 
   return (
@@ -42,47 +65,103 @@ export default function LoginPage() {
       </header>
 
       <main className="flex flex-1 items-center justify-center px-4 pb-16">
-        <Card className="w-full max-w-sm">
-          <CardHeader className="text-center">
-            <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-              <Lock className="h-5 w-5 text-primary" />
-            </div>
-            <CardTitle className="text-xl">Admin Login</CardTitle>
-            <CardDescription>Sign in to access the admin panel</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="grid gap-4">
-              <div className="grid gap-1.5">
-                <Label htmlFor="username">Username</Label>
-                <Input
-                  id="username"
-                  type="text"
-                  autoComplete="username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                />
+        {view === "login" ? (
+          <Card className="w-full max-w-sm">
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+                <Lock className="h-5 w-5 text-primary" />
               </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
+              <CardTitle className="text-xl">Admin Login</CardTitle>
+              <CardDescription>Sign in to access the admin panel</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="grid gap-4">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="username">Username</Label>
+                  <Input
+                    id="username"
+                    type="text"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                {login.isError && (
+                  <p className="text-sm text-destructive">Invalid username or password.</p>
+                )}
+                <Button type="submit" className="w-full" disabled={login.isPending}>
+                  {login.isPending ? "Signing in…" : "Sign In"}
+                </Button>
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground hover:text-primary text-center underline underline-offset-2 bg-transparent border-none cursor-pointer"
+                  onClick={() => setView("forgot")}
+                >
+                  Forgot password?
+                </button>
+              </form>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="w-full max-w-sm">
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
+                <Lock className="h-5 w-5 text-primary" />
               </div>
-              {login.isError && (
-                <p className="text-sm text-destructive">Invalid username or password.</p>
+              <CardTitle className="text-xl">Reset Password</CardTitle>
+              <CardDescription>Enter your username and we'll send a temporary password to your registered email.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {forgotMessage ? (
+                <div className="space-y-4">
+                  <p className="text-sm text-foreground text-center">{forgotMessage}</p>
+                  <Button variant="outline" className="w-full" onClick={() => { setView("login"); setForgotMessage(""); setForgotUsername(""); }}>
+                    Back to Sign In
+                  </Button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotSubmit} className="grid gap-4">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="forgot-username">Username</Label>
+                    <Input
+                      id="forgot-username"
+                      type="text"
+                      autoComplete="username"
+                      value={forgotUsername}
+                      onChange={(e) => setForgotUsername(e.target.value)}
+                      required
+                    />
+                  </div>
+                  {forgotPassword.isError && (
+                    <p className="text-sm text-destructive">Something went wrong. Please try again.</p>
+                  )}
+                  <Button type="submit" className="w-full" disabled={forgotPassword.isPending}>
+                    {forgotPassword.isPending ? "Sending…" : "Send Temporary Password"}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-sm text-muted-foreground hover:text-primary text-center underline underline-offset-2 bg-transparent border-none cursor-pointer"
+                    onClick={() => setView("login")}
+                  >
+                    Back to Sign In
+                  </button>
+                </form>
               )}
-              <Button type="submit" className="w-full" disabled={login.isPending}>
-                {login.isPending ? "Signing in…" : "Sign In"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </main>
     </div>
   );

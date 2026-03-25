@@ -1,13 +1,23 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import { randomBytes } from "crypto";
+import nodemailer from "nodemailer";
 import rateLimit from "express-rate-limit";
-import { storage, verifyPassword } from "./storage";
-import { generateRequestSchema, type GenerateRequest } from "@shared/schema";
+import { storage, verifyPassword, hashPassword } from "./storage";
+import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
 const loginRateLimit = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 10,
   message: { message: "Too many login attempts. Please try again in 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const forgotPasswordRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { message: "Too many requests. Please try again later." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -15,6 +25,29 @@ const loginRateLimit = rateLimit({
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (req.session.userId) return next();
   res.status(401).json({ message: "Authentication required" });
+}
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (req.session.userId && req.session.role === "admin") return next();
+  res.status(403).json({ message: "Admin access required" });
+}
+
+async function sendEmail(to: string, subject: string, text: string) {
+  if (!process.env.SMTP_HOST) {
+    console.log(`[EMAIL - no SMTP configured] To: ${to} | Subject: ${subject} | Body: ${text}`);
+    return;
+  }
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: parseInt(process.env.SMTP_PORT || "587"),
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to,
+    subject,
+    text,
+  });
 }
 
 export async function registerRoutes(
@@ -35,7 +68,8 @@ export async function registerRoutes(
     }
     req.session.userId = user.id;
     req.session.username = user.username;
-    res.json({ username: user.username });
+    req.session.role = user.role;
+    res.json({ username: user.username, role: user.role });
   });
 
   app.post("/api/auth/logout", (req, res) => {
@@ -45,7 +79,7 @@ export async function registerRoutes(
 
   app.get("/api/auth/me", (req, res) => {
     if (req.session.userId) {
-      res.json({ username: req.session.username });
+      res.json({ username: req.session.username, role: req.session.role });
     } else {
       res.status(401).json({ message: "Not authenticated" });
     }
@@ -60,7 +94,7 @@ export async function registerRoutes(
     res.json({ ...safeSettings, hasApiKey: !!_key });
   });
 
-  app.post("/api/admin/ai-settings", requireAuth, async (req, res) => {
+  app.post("/api/admin/ai-settings", requireAdmin, async (req, res) => {
     const { provider, apiKey, orgId, systemPrompt, companyName } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
@@ -119,6 +153,66 @@ export async function registerRoutes(
       trainingDocSize: null,
     });
     res.json({ ok: true });
+  });
+
+  // --- User Management ---
+
+  app.get("/api/admin/users", requireAuth, async (_req, res) => {
+    const users = await storage.listUsers();
+    res.json(users);
+  });
+
+  app.post("/api/admin/users", requireAuth, async (req, res) => {
+    const parsed = insertUserSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });
+      return;
+    }
+    const existing = await storage.getUserByUsername(parsed.data.username);
+    if (existing) {
+      res.status(409).json({ error: "Username already exists" });
+      return;
+    }
+    const hashed = await hashPassword(parsed.data.password);
+    const user = await storage.createUser({ ...parsed.data, password: hashed });
+    const { password: _, ...safeUser } = user;
+    res.status(201).json(safeUser);
+  });
+
+  app.delete("/api/admin/users/:id", requireAuth, async (req, res) => {
+    // Prevent self-deletion
+    if (req.params.id === req.session.userId) {
+      res.status(400).json({ error: "Cannot delete your own account" });
+      return;
+    }
+    await storage.deleteUser(req.params.id);
+    res.json({ ok: true });
+  });
+
+  // --- Forgot Password ---
+
+  app.post("/api/auth/forgot-password", forgotPasswordRateLimit, async (req, res) => {
+    const { username } = req.body;
+    if (!username || typeof username !== "string") {
+      res.status(400).json({ error: "Username is required" });
+      return;
+    }
+    const user = await storage.getUserByUsername(username);
+    // Always respond with same message to avoid username enumeration
+    const successMessage = "If an account exists with that username, a temporary password has been sent to the registered email.";
+    if (!user || !user.email) {
+      res.json({ message: successMessage });
+      return;
+    }
+    const tempPassword = randomBytes(10).toString("hex");
+    const hashed = await hashPassword(tempPassword);
+    await storage.updateUserPassword(user.id, hashed);
+    await sendEmail(
+      user.email,
+      "Your temporary password",
+      `Your temporary password is: ${tempPassword}\n\nPlease log in and change it as soon as possible.`
+    );
+    res.json({ message: successMessage });
   });
 
   // --- Document Generation ---
