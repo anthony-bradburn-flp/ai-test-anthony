@@ -43,6 +43,9 @@ export type Template = {
   name: string;
   type: string;
   lastUpdated: string;
+  filePath?: string;
+  originalFilename?: string;
+  fileSize?: number;
 };
 
 export type Package = {
@@ -105,6 +108,8 @@ export interface IStorage {
   listTemplates(): Promise<Template[]>;
   createTemplate(name: string, type: string): Promise<Template>;
   updateTemplate(id: string, fields: { name?: string; type?: string }): Promise<Template | undefined>;
+  updateTemplateFile(id: string, filePath: string, originalFilename: string, fileSize: number): Promise<Template | undefined>;
+  getTemplate(id: string): Promise<Template | undefined>;
   deleteTemplate(id: string): Promise<void>;
   listPackages(): Promise<Package[]>;
   createPackage(type: string, description: string, documents: string[]): Promise<Package>;
@@ -233,6 +238,19 @@ export class MemStorage implements IStorage {
     const t = this.templates.get(id);
     if (!t) return undefined;
     const updated = { ...t, ...fields, lastUpdated: new Date().toISOString().slice(0, 10) };
+    this.templates.set(id, updated);
+    this.persist();
+    return updated;
+  }
+
+  async getTemplate(id: string): Promise<Template | undefined> {
+    return this.templates.get(id);
+  }
+
+  async updateTemplateFile(id: string, filePath: string, originalFilename: string, fileSize: number): Promise<Template | undefined> {
+    const t = this.templates.get(id);
+    if (!t) return undefined;
+    const updated = { ...t, filePath, originalFilename, fileSize, lastUpdated: new Date().toISOString().slice(0, 10) };
     this.templates.set(id, updated);
     this.persist();
     return updated;
