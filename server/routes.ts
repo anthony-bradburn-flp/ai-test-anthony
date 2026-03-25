@@ -1,6 +1,11 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (req.session.userId) return next();
+  res.status(401).json({ message: "Authentication required" });
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -8,16 +13,43 @@ export async function registerRoutes(
 ): Promise<Server> {
   // prefix all routes with /api
 
+  // --- Auth ---
+
+  app.post("/api/auth/login", async (req, res) => {
+    const { username, password } = req.body;
+    const user = await storage.getUserByUsername(username);
+    if (!user || user.password !== password) {
+      res.status(401).json({ message: "Invalid username or password" });
+      return;
+    }
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    res.json({ username: user.username });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy(() => {});
+    res.json({ ok: true });
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    if (req.session.userId) {
+      res.json({ username: req.session.username });
+    } else {
+      res.status(401).json({ message: "Not authenticated" });
+    }
+  });
+
   // --- AI Settings ---
 
-  app.get("/api/admin/ai-settings", async (_req, res) => {
+  app.get("/api/admin/ai-settings", requireAuth, async (_req, res) => {
     const settings = await storage.getAiSettings();
     // Never expose the API key in GET responses
     const { apiKey: _key, ...safeSettings } = settings;
     res.json({ ...safeSettings, hasApiKey: !!_key });
   });
 
-  app.post("/api/admin/ai-settings", async (req, res) => {
+  app.post("/api/admin/ai-settings", requireAuth, async (req, res) => {
     const { provider, apiKey, orgId, systemPrompt, companyName } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
@@ -32,7 +64,7 @@ export async function registerRoutes(
 
   // --- Training Document ---
 
-  app.post("/api/admin/ai-settings/training-doc", async (req, res) => {
+  app.post("/api/admin/ai-settings/training-doc", requireAuth, async (req, res) => {
     const { content, filename, size } = req.body;
 
     if (!content || typeof content !== "string") {
@@ -58,7 +90,7 @@ export async function registerRoutes(
     });
   });
 
-  app.delete("/api/admin/ai-settings/training-doc", async (_req, res) => {
+  app.delete("/api/admin/ai-settings/training-doc", requireAuth, async (_req, res) => {
     await storage.updateAiSettings({
       trainingDocContent: null,
       trainingDocFilename: null,
