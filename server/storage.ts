@@ -1,6 +1,31 @@
 import { type User, type InsertUser } from "@shared/schema";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
+
+const DATA_DIR = join(process.cwd(), "data");
+const DATA_FILE = join(DATA_DIR, "store.json");
+
+function loadPersistedData(): { users: User[]; templates: Template[]; packages: Package[] } {
+  try {
+    if (existsSync(DATA_FILE)) {
+      return JSON.parse(readFileSync(DATA_FILE, "utf8"));
+    }
+  } catch (e) {
+    console.warn("[storage] Failed to read persist file, starting fresh:", e);
+  }
+  return { users: [], templates: [], packages: [] };
+}
+
+function savePersistedData(users: User[], templates: Template[], packages: Package[]) {
+  try {
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(DATA_FILE, JSON.stringify({ users, templates, packages }, null, 2));
+  } catch (e) {
+    console.error("[storage] Failed to persist data:", e);
+  }
+}
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12);
@@ -113,18 +138,35 @@ export class MemStorage implements IStorage {
   private packages: Map<string, Package>;
 
   constructor() {
-    this.users = new Map();
+    const persisted = loadPersistedData();
     this.aiSettings = { ...DEFAULT_AI_SETTINGS };
-    this.templates = new Map(DEFAULT_TEMPLATES.map((t) => [t.id, t]));
-    this.packages = new Map(DEFAULT_PACKAGES.map((p) => [p.id, p]));
-    // Seed initial admin user with hashed password
+    // Restore persisted data, falling back to defaults for templates/packages
+    this.users = new Map(persisted.users.map((u) => [u.id, u]));
+    this.templates = persisted.templates.length
+      ? new Map(persisted.templates.map((t) => [t.id, t]))
+      : new Map(DEFAULT_TEMPLATES.map((t) => [t.id, t]));
+    this.packages = persisted.packages.length
+      ? new Map(persisted.packages.map((p) => [p.id, p]))
+      : new Map(DEFAULT_PACKAGES.map((p) => [p.id, p]));
+    // Ensure admin user always exists (re-seed if missing or password changed)
     const adminPassword = process.env.ADMIN_PASSWORD || "governance-admin";
     if (!process.env.ADMIN_PASSWORD) {
       console.warn("[WARN] ADMIN_PASSWORD env var not set — using default. Change this in production.");
     }
-    hashPassword(adminPassword).then((hash) => {
-      this.createUser({ username: "admin", password: hash, role: "admin" });
-    });
+    const existingAdmin = persisted.users.find((u) => u.username === "admin");
+    if (!existingAdmin) {
+      hashPassword(adminPassword).then((hash) => {
+        this.createUser({ username: "admin", password: hash, role: "admin" });
+      });
+    }
+  }
+
+  private persist() {
+    savePersistedData(
+      Array.from(this.users.values()),
+      Array.from(this.templates.values()),
+      Array.from(this.packages.values()),
+    );
   }
 
   async getUser(id: string): Promise<User | undefined> {
@@ -147,6 +189,7 @@ export class MemStorage implements IStorage {
       role: insertUser.role ?? "manager",
     };
     this.users.set(id, user);
+    this.persist();
     return user;
   }
 
@@ -156,11 +199,12 @@ export class MemStorage implements IStorage {
 
   async deleteUser(id: string): Promise<void> {
     this.users.delete(id);
+    this.persist();
   }
 
   async updateUserPassword(id: string, hashedPassword: string): Promise<void> {
     const user = this.users.get(id);
-    if (user) this.users.set(id, { ...user, password: hashedPassword });
+    if (user) { this.users.set(id, { ...user, password: hashedPassword }); this.persist(); }
   }
 
   async updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined> {
@@ -168,6 +212,7 @@ export class MemStorage implements IStorage {
     if (!user) return undefined;
     const updated = { ...user, ...fields };
     this.users.set(id, updated);
+    this.persist();
     const { password: _, ...safe } = updated;
     return safe;
   }
@@ -180,6 +225,7 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const t: Template = { id, name, type, lastUpdated: new Date().toISOString().slice(0, 10) };
     this.templates.set(id, t);
+    this.persist();
     return t;
   }
 
@@ -188,11 +234,13 @@ export class MemStorage implements IStorage {
     if (!t) return undefined;
     const updated = { ...t, ...fields, lastUpdated: new Date().toISOString().slice(0, 10) };
     this.templates.set(id, updated);
+    this.persist();
     return updated;
   }
 
   async deleteTemplate(id: string): Promise<void> {
     this.templates.delete(id);
+    this.persist();
   }
 
   async listPackages(): Promise<Package[]> {
@@ -203,6 +251,7 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const p: Package = { id, type, description, documents };
     this.packages.set(id, p);
+    this.persist();
     return p;
   }
 
@@ -211,11 +260,13 @@ export class MemStorage implements IStorage {
     if (!p) return undefined;
     const updated = { ...p, ...fields };
     this.packages.set(id, updated);
+    this.persist();
     return updated;
   }
 
   async deletePackage(id: string): Promise<void> {
     this.packages.delete(id);
+    this.persist();
   }
 
   async getAiSettings(): Promise<AiSettings> {
