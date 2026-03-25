@@ -139,11 +139,11 @@ export default function AdminPage() {
   const [showAddPackage, setShowAddPackage] = useState(false);
   const [newPkgType, setNewPkgType] = useState("");
   const [newPkgDesc, setNewPkgDesc] = useState("");
-  const [newPkgDocs, setNewPkgDocs] = useState("");
+  const [newPkgDocs, setNewPkgDocs] = useState<string[]>([]);
   const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
   const [editPkgType, setEditPkgType] = useState("");
   const [editPkgDesc, setEditPkgDesc] = useState("");
-  const [editPkgDocs, setEditPkgDocs] = useState("");
+  const [editPkgDocs, setEditPkgDocs] = useState<string[]>([]);
 
   // Template state
   const [showAddTemplate, setShowAddTemplate] = useState(false);
@@ -358,7 +358,7 @@ export default function AdminPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/packages"] });
       setShowAddPackage(false);
-      setNewPkgType(""); setNewPkgDesc(""); setNewPkgDocs("");
+      setNewPkgType(""); setNewPkgDesc(""); setNewPkgDocs([]);
       toast.success("Package created");
     },
     onError: () => toast.error("Failed to create package"),
@@ -400,7 +400,7 @@ export default function AdminPage() {
     createPackageMutation.mutate({
       type: newPkgType.trim(),
       description: newPkgDesc.trim(),
-      documents: newPkgDocs.split(",").map((d) => d.trim()).filter(Boolean),
+      documents: newPkgDocs,
     });
   };
 
@@ -411,7 +411,7 @@ export default function AdminPage() {
       id: editingPackageId,
       type: editPkgType.trim(),
       description: editPkgDesc.trim(),
-      documents: editPkgDocs.split(",").map((d) => d.trim()).filter(Boolean),
+      documents: editPkgDocs,
     });
   };
 
@@ -599,9 +599,31 @@ export default function AdminPage() {
                       <Input id="new-pkg-desc" value={newPkgDesc} onChange={(e) => setNewPkgDesc(e.target.value)} placeholder="Brief description" required />
                     </div>
                     <div className="space-y-1.5 sm:col-span-2">
-                      <Label htmlFor="new-pkg-docs">Required Documents <span className="text-destructive">*</span></Label>
-                      <Input id="new-pkg-docs" value={newPkgDocs} onChange={(e) => setNewPkgDocs(e.target.value)} placeholder="Comma-separated, e.g. RACI Matrix Template, RAID Log Master" required />
-                      <p className="text-xs text-muted-foreground">Separate document names with commas.</p>
+                      <Label>Required Documents</Label>
+                      {templatesData && templatesData.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          {templatesData.map((t) => {
+                            const selected = newPkgDocs.includes(t.name);
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => setNewPkgDocs(selected ? newPkgDocs.filter((d) => d !== t.name) : [...newPkgDocs, t.name])}
+                                className={cn(
+                                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                                  selected
+                                    ? "bg-primary text-primary-foreground border-primary"
+                                    : "bg-background text-foreground border-border hover:border-primary hover:text-primary"
+                                )}
+                              >
+                                {t.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground pt-1">No templates available — add templates first.</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -640,8 +662,31 @@ export default function AdminPage() {
                                   <Input id="edit-pkg-desc" value={editPkgDesc} onChange={(e) => setEditPkgDesc(e.target.value)} required />
                                 </div>
                                 <div className="space-y-1.5 sm:col-span-2">
-                                  <Label htmlFor="edit-pkg-docs">Required Documents</Label>
-                                  <Input id="edit-pkg-docs" value={editPkgDocs} onChange={(e) => setEditPkgDocs(e.target.value)} placeholder="Comma-separated document names" />
+                                  <Label>Required Documents</Label>
+                                  {templatesData && templatesData.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2 pt-1">
+                                      {templatesData.map((t) => {
+                                        const selected = editPkgDocs.includes(t.name);
+                                        return (
+                                          <button
+                                            key={t.id}
+                                            type="button"
+                                            onClick={() => setEditPkgDocs(selected ? editPkgDocs.filter((d) => d !== t.name) : [...editPkgDocs, t.name])}
+                                            className={cn(
+                                              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                                              selected
+                                                ? "bg-primary text-primary-foreground border-primary"
+                                                : "bg-background text-foreground border-border hover:border-primary hover:text-primary"
+                                            )}
+                                          >
+                                            {t.name}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground pt-1">No templates available.</p>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex gap-2">
@@ -669,7 +714,7 @@ export default function AdminPage() {
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
-                              onClick={() => { setEditingPackageId(pkg.id); setEditPkgType(pkg.type); setEditPkgDesc(pkg.description); setEditPkgDocs(pkg.documents.join(", ")); setShowAddPackage(false); }}>
+                              onClick={() => { setEditingPackageId(pkg.id); setEditPkgType(pkg.type); setEditPkgDesc(pkg.description); setEditPkgDocs([...pkg.documents]); setShowAddPackage(false); }}>
                               <Edit2 className="h-4 w-4" />
                             </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
