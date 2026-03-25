@@ -327,7 +327,10 @@ export default function AdminPage() {
   const uploadTemplateFileMutation = useMutation({
     mutationFn: async ({ id, file }: { id: string; file: File }) => {
       const arrayBuffer = await file.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
       const res = await fetch(`/api/admin/templates/${id}/file`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
