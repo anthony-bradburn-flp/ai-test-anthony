@@ -212,7 +212,7 @@ export default function GovernanceStarterPage() {
               Capture project information, stakeholders, and documentation needs.
             </p>
           </div>
-          <Link href="/login">
+          <Link href="/admin">
             <Button variant="outline" className="font-bold">
               Admin Login
             </Button>
