@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 288" width="288" height="288">
+  <circle cx="144" cy="144" r="144" fill="#ED1442"/>
+  <text
+    x="152"
+    y="195"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="175"
+    font-weight="bold"
+    font-style="italic"
+    fill="white"
+    text-anchor="middle"
+    letter-spacing="-8"
+  >F</text>
+</svg>
