@@ -95,6 +95,33 @@ type AiSettingsResponse = {
   trainingDocSize: number | null;
 };
 
+function SectionCard({
+  title,
+  description,
+  children,
+  action,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <Card className="overflow-hidden border border-border bg-card shadow-[0_6px_18px_rgba(17,24,39,0.08)] rounded-[14px]">
+      <CardHeader className="border-b border-border bg-muted px-4 py-[14px] dark:bg-muted/80 flex flex-row items-center justify-between space-y-0">
+        <div>
+          <CardTitle className="text-base font-bold text-foreground">{title}</CardTitle>
+          <CardDescription className="text-xs text-muted-foreground mt-1">{description}</CardDescription>
+        </div>
+        {action && <div>{action}</div>}
+      </CardHeader>
+      <CardContent className="p-0">
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdminPage() {
   const logout = useLogout();
   const { user: currentUser } = useAuth();
@@ -324,30 +351,6 @@ export default function AdminPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const SectionCard = ({
-    title,
-    description,
-    children,
-    action,
-  }: {
-    title: string;
-    description: string;
-    children: React.ReactNode;
-    action?: React.ReactNode;
-  }) => (
-    <Card className="overflow-hidden border border-border bg-card shadow-[0_6px_18px_rgba(17,24,39,0.08)] rounded-[14px]">
-      <CardHeader className="border-b border-border bg-muted px-4 py-[14px] dark:bg-muted/80 flex flex-row items-center justify-between space-y-0">
-        <div>
-          <CardTitle className="text-base font-bold text-foreground">{title}</CardTitle>
-          <CardDescription className="text-xs text-muted-foreground mt-1">{description}</CardDescription>
-        </div>
-        {action && <div>{action}</div>}
-      </CardHeader>
-      <CardContent className="p-0">
-        {children}
-      </CardContent>
-    </Card>
-  );
 
   return (
     <div className="min-h-dvh bg-background text-foreground font-sans selection:bg-primary/30">
