@@ -11,6 +11,7 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import { storage, verifyPassword, hashPassword } from "./storage";
+import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey } from "./secrets";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
 const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
@@ -99,22 +100,18 @@ export async function registerRoutes(
 
   app.get("/api/admin/ai-settings", requireAuth, async (_req, res) => {
     const settings = await storage.getAiSettings();
-    // Never expose the API key in GET responses
-    const { apiKey: _key, ...safeSettings } = settings;
-    res.json({ ...safeSettings, hasApiKey: !!_key });
+    res.json({ ...settings, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
   });
 
   app.post("/api/admin/ai-settings", requireAdmin, async (req, res) => {
-    const { provider, apiKey, orgId, systemPrompt, companyName } = req.body;
+    const { provider, orgId, systemPrompt, companyName } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
-      ...(apiKey && { apiKey }),
       ...(orgId !== undefined && { orgId }),
       ...(systemPrompt !== undefined && { systemPrompt }),
       ...(companyName !== undefined && { companyName }),
     });
-    const { apiKey: _key, ...safeSettings } = updated;
-    res.json({ ...safeSettings, hasApiKey: !!_key });
+    res.json({ ...updated, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
   });
 
   // --- Training Document ---
@@ -356,8 +353,10 @@ export async function registerRoutes(
     const settings = await storage.getAiSettings();
     const projectData = parsed.data;
 
-    if (!settings.apiKey) {
-      res.status(400).json({ error: "No API key configured. Add one in Admin > AI Settings." });
+    const activeKey = settings.provider === "anthropic" ? getAnthropicKey() : getOpenAIKey();
+    if (!activeKey) {
+      const param = settings.provider === "anthropic" ? "/pm-governance/anthropic-api-key" : "/pm-governance/openai-api-key";
+      res.status(400).json({ error: `No API key available. Add it to AWS Parameter Store at: ${param}` });
       return;
     }
 
@@ -379,7 +378,7 @@ export async function registerRoutes(
       let aiContent: string;
 
       if (settings.provider === "anthropic") {
-        const client = new Anthropic({ apiKey: settings.apiKey });
+        const client = new Anthropic({ apiKey: getAnthropicKey() });
         const message = await client.messages.create({
           model: "claude-sonnet-4-6",
           max_tokens: 8192,
@@ -388,7 +387,7 @@ export async function registerRoutes(
         });
         aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
       } else {
-        const client = new OpenAI({ apiKey: settings.apiKey, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+        const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
         const completion = await client.chat.completions.create({
           model: "gpt-4o",
           max_tokens: 8192,

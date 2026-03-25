@@ -57,7 +57,6 @@ export type Package = {
 
 export type AiSettings = {
   provider: "openai" | "anthropic";
-  apiKey: string;
   orgId: string;
   systemPrompt: string;
   companyName: string;
@@ -69,7 +68,6 @@ export type AiSettings = {
 
 const DEFAULT_AI_SETTINGS: AiSettings = {
   provider: "openai",
-  apiKey: "",
   orgId: "",
   systemPrompt:
     `Persona: Act as a Principal Project Consultant at Flipside Group, an expert in project delivery with a meticulous eye for detail. Your task is to flawlessly execute the creation of client-ready governance documentation according to the company's established best practices.
