@@ -1,16 +1,20 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, Redirect } from "wouter";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useLogin } from "@/hooks/use-auth";
+import { useAuth, useLogin } from "@/hooks/use-auth";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const { user, isLoading } = useAuth();
   const login = useLogin();
+
+  if (isLoading) return null;
+  if (user) return <Redirect to="/admin" />;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
