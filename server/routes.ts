@@ -1,7 +1,16 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import rateLimit from "express-rate-limit";
+import { storage, verifyPassword } from "./storage";
 import { generateRequestSchema, type GenerateRequest } from "@shared/schema";
+
+const loginRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: { message: "Too many login attempts. Please try again in 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (req.session.userId) return next();
@@ -16,10 +25,11 @@ export async function registerRoutes(
 
   // --- Auth ---
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginRateLimit, async (req, res) => {
     const { username, password } = req.body;
     const user = await storage.getUserByUsername(username);
-    if (!user || user.password !== password) {
+    const valid = user ? await verifyPassword(password, user.password) : false;
+    if (!user || !valid) {
       res.status(401).json({ message: "Invalid username or password" });
       return;
     }
@@ -76,6 +86,16 @@ export async function registerRoutes(
       res.status(400).json({ error: "filename is required" });
       return;
     }
+    // Reject path traversal and invalid characters in filename
+    if (/[/\\]|\.\./.test(filename) || !/^[\w\-. ]+\.(docx|txt|md)$/i.test(filename)) {
+      res.status(400).json({ error: "Invalid filename" });
+      return;
+    }
+    // Enforce 100 KB content limit
+    if (Buffer.byteLength(content, "utf8") > 100 * 1024) {
+      res.status(413).json({ error: "Document exceeds 100 KB limit" });
+      return;
+    }
 
     const updated = await storage.updateAiSettings({
       trainingDocContent: content,
@@ -105,7 +125,7 @@ export async function registerRoutes(
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
 
-  app.post("/api/generate", async (req, res) => {
+  app.post("/api/generate", requireAuth, async (req, res) => {
     const parsed = generateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });

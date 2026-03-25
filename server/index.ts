@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import MemoryStore from "memorystore";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -12,8 +13,16 @@ declare module "express-session" {
   }
 }
 
+if (!process.env.SESSION_SECRET) {
+  console.warn("[WARN] SESSION_SECRET env var not set — using insecure default. Set this in production.");
+}
+
 const app = express();
 const httpServer = createServer(app);
+
+app.use(helmet({
+  contentSecurityPolicy: false, // Disabled to allow Vite's inline scripts in dev; enable with proper config in production
+}));
 
 const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || "pm-governance";
 const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS || "flipside-pm";
@@ -44,7 +53,12 @@ app.use(
     resave: false,
     saveUninitialized: false,
     store: new SessionStore({ checkPeriod: 86400000 }),
-    cookie: { httpOnly: true, maxAge: 86400000 },
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    },
   }),
 );
 
@@ -85,7 +99,12 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        const safe = { ...capturedJsonResponse };
+        // Strip large/sensitive fields from logs
+        for (const key of ["systemPrompt", "userPrompt", "trainingDocContent", "apiKey"]) {
+          if (key in safe) safe[key] = "[redacted]";
+        }
+        logLine += ` :: ${JSON.stringify(safe)}`;
       }
 
       log(logLine);
