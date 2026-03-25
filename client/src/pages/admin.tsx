@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import mammoth from "mammoth/mammoth.browser";
 import { useLogout } from "@/hooks/use-auth";
 import { Link } from "wouter";
 import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Key, BrainCircuit, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
@@ -151,7 +152,14 @@ export default function AdminPage() {
 
   const uploadTrainingDocMutation = useMutation({
     mutationFn: async (file: File) => {
-      const content = await file.text();
+      let content: string;
+      if (file.name.endsWith(".docx")) {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        content = result.value;
+      } else {
+        content = await file.text();
+      }
       const res = await fetch("/api/admin/ai-settings/training-doc", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -534,7 +542,7 @@ export default function AdminPage() {
                       Template Training Document
                     </h3>
                     <p className="text-xs text-muted-foreground">
-                      Upload a plain-text document defining how your governance templates should be completed — examples, field definitions, and standards. This is injected into every generation prompt.
+                      Upload a document defining how your governance templates should be completed — examples, field definitions, and standards. Supports .txt, .md, and .docx. This is injected into every generation prompt.
                     </p>
                   </div>
 
@@ -604,7 +612,7 @@ export default function AdminPage() {
                         {uploadTrainingDocMutation.isPending ? "Uploading…" : "Upload training document"}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Plain text (.txt, .md) files supported · Max recommended 50 KB
+                        .txt, .md, .docx supported · Max recommended 50 KB
                       </p>
                     </div>
                   )}
@@ -612,7 +620,7 @@ export default function AdminPage() {
                   <input
                     ref={trainingDocInputRef}
                     type="file"
-                    accept=".txt,.md"
+                    accept=".txt,.md,.docx"
                     className="hidden"
                     onChange={handleTrainingDocFileChange}
                   />
