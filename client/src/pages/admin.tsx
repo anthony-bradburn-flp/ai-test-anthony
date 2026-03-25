@@ -1137,18 +1137,18 @@ export default function AdminPage() {
                       <Label>OpenAI API Key</Label>
                       <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${aiSettings?.hasOpenAIKey ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
                         <span className={`h-2 w-2 rounded-full flex-shrink-0 ${aiSettings?.hasOpenAIKey ? "bg-green-500" : "bg-amber-400"}`} />
-                        {aiSettings?.hasOpenAIKey ? "Configured via environment variable" : "Not set — add OPENAI_API_KEY to server .env"}
+                        {aiSettings?.hasOpenAIKey ? "Configured via AWS Parameter Store" : "Not set — add to AWS Parameter Store at /pm-governance/openai-api-key"}
                       </div>
                     </div>
                     <div className="space-y-2">
                       <Label>Anthropic API Key</Label>
                       <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${aiSettings?.hasAnthropicKey ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
                         <span className={`h-2 w-2 rounded-full flex-shrink-0 ${aiSettings?.hasAnthropicKey ? "bg-green-500" : "bg-amber-400"}`} />
-                        {aiSettings?.hasAnthropicKey ? "Configured via environment variable" : "Not set — add ANTHROPIC_API_KEY to server .env"}
+                        {aiSettings?.hasAnthropicKey ? "Configured via AWS Parameter Store" : "Not set — add to AWS Parameter Store at /pm-governance/anthropic-api-key"}
                       </div>
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">API keys are managed securely via server environment variables and are never stored in the database or visible in the UI.</p>
+                  <p className="text-xs text-muted-foreground">API keys are stored in AWS Systems Manager Parameter Store and fetched securely at startup. They are never saved to disk or visible in the UI.</p>
                   <div className="space-y-2">
                     <Label htmlFor="org-id">OpenAI Organization ID <span className="font-normal text-muted-foreground">(Optional)</span></Label>
                     <Input

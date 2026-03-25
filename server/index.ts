@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import { initSecrets } from "./secrets";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import helmet from "helmet";
@@ -118,6 +119,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await initSecrets();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
