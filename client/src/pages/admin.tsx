@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
@@ -237,14 +237,14 @@ export default function AdminPage() {
   });
 
   // Sync fetched settings into local form state once loaded
-  useState(() => {
+  useEffect(() => {
     if (aiSettings) {
       setProvider(aiSettings.provider);
       setSystemPrompt(aiSettings.systemPrompt);
       setCompanyName(aiSettings.companyName);
       setOrgId(aiSettings.orgId);
     }
-  });
+  }, [aiSettings]);
 
   const saveSettingsMutation = useMutation({
     mutationFn: async () => {
@@ -699,7 +699,7 @@ export default function AdminPage() {
                     AI Provider Selection
                   </h3>
                   <RadioGroup
-                    value={aiSettings?.provider ?? provider}
+                    value={provider}
                     onValueChange={(v) => isAdmin && setProvider(v as "openai" | "anthropic")}
                     className="flex flex-col gap-3 sm:flex-row sm:gap-6"
                   >
@@ -758,7 +758,7 @@ export default function AdminPage() {
                       <Textarea
                         id="system-prompt"
                         className="h-24 resize-none"
-                        value={systemPrompt || aiSettings?.systemPrompt || ""}
+                        value={systemPrompt}
                         onChange={(e) => setSystemPrompt(e.target.value)}
                         disabled={!isAdmin}
                       />
@@ -770,7 +770,7 @@ export default function AdminPage() {
                       <Label htmlFor="company-name">Company Name</Label>
                       <Input
                         id="company-name"
-                        value={companyName || aiSettings?.companyName || ""}
+                        value={companyName}
                         onChange={(e) => setCompanyName(e.target.value)}
                         disabled={!isAdmin}
                       />
