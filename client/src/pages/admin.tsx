@@ -109,6 +109,13 @@ export default function AdminPage() {
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<"admin" | "manager">("manager");
 
+  // Edit User state
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editUsername, setEditUsername] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editRole, setEditRole] = useState<"admin" | "manager">("manager");
+  const [editPassword, setEditPassword] = useState("");
+
   // AI Settings state
   const queryClient = useQueryClient();
   const [provider, setProvider] = useState<"openai" | "anthropic">("openai");
@@ -168,6 +175,45 @@ export default function AdminPage() {
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
+  const updateUserMutation = useMutation({
+    mutationFn: async (data: { id: string; username: string; email: string; role: "admin" | "manager"; password: string }) => {
+      const body: Record<string, string> = { username: data.username, email: data.email, role: data.role };
+      if (data.password) body.password = data.password;
+      const res = await fetch(`/api/admin/users/${data.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update user");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setEditingUserId(null);
+      setEditPassword("");
+      toast.success("User updated");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const startEditing = (u: ApiUser) => {
+    setEditingUserId(u.id);
+    setEditUsername(u.username);
+    setEditEmail(u.email ?? "");
+    setEditRole(u.role as "admin" | "manager");
+    setEditPassword("");
+    setShowAddUser(false);
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUserId || !editUsername.trim()) return;
+    updateUserMutation.mutate({ id: editingUserId, username: editUsername.trim(), email: editEmail.trim(), role: editRole, password: editPassword });
+  };
 
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
@@ -535,30 +581,93 @@ export default function AdminPage() {
                     <TableRow>
                       <TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell>
                     </TableRow>
-                  ) : usersData?.map((u) => (
-                    <TableRow key={u.id}>
-                      <TableCell className="font-semibold">{u.username}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{u.email ?? "—"}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={cn("font-medium bg-background capitalize", u.role === "admin" && "border-primary text-primary")}>
-                          {u.role}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {u.id !== currentUser?.username && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                            onClick={() => deleteUserMutation.mutate(u.id)}
-                            disabled={deleteUserMutation.isPending}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  ) : usersData?.map((u) => {
+                    // Managers can only see edit/delete on manager users
+                    const canEdit = isAdmin || u.role === "manager";
+                    const isSelf = u.username === currentUser?.username;
+                    if (editingUserId === u.id) {
+                      return (
+                        <TableRow key={u.id} className="bg-muted/20">
+                          <TableCell colSpan={4} className="p-4">
+                            <form onSubmit={handleEditSubmit} className="space-y-3">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-username">Username <span className="text-destructive">*</span></Label>
+                                  <Input id="edit-username" value={editUsername} onChange={(e) => setEditUsername(e.target.value)} required />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-email">Email</Label>
+                                  <Input id="edit-email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} placeholder="user@example.com" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-password">New Password</Label>
+                                  <Input id="edit-password" type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="Leave blank to keep current" />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label>Role</Label>
+                                  <RadioGroup
+                                    value={editRole}
+                                    onValueChange={(v) => setEditRole(v as "admin" | "manager")}
+                                    className="flex gap-4 pt-1"
+                                  >
+                                    <div className="flex items-center space-x-2">
+                                      <RadioGroupItem value="manager" id="edit-role-manager" />
+                                      <Label htmlFor="edit-role-manager" className="font-normal cursor-pointer">Manager</Label>
+                                    </div>
+                                    {isAdmin && (
+                                      <div className="flex items-center space-x-2">
+                                        <RadioGroupItem value="admin" id="edit-role-admin" />
+                                        <Label htmlFor="edit-role-admin" className="font-normal cursor-pointer">Admin</Label>
+                                      </div>
+                                    )}
+                                  </RadioGroup>
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button type="submit" size="sm" className="font-bold" disabled={updateUserMutation.isPending}>
+                                  {updateUserMutation.isPending ? "Saving…" : "Save Changes"}
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setEditingUserId(null)}>
+                                  Cancel
+                                </Button>
+                              </div>
+                            </form>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    return (
+                      <TableRow key={u.id}>
+                        <TableCell className="font-semibold">{u.username}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{u.email ?? "—"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={cn("font-medium bg-background capitalize", u.role === "admin" && "border-primary text-primary")}>
+                            {u.role}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            {canEdit && (
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => startEditing(u)}>
+                                <Edit2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {canEdit && !isSelf && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => deleteUserMutation.mutate(u.id)}
+                                disabled={deleteUserMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </SectionCard>
