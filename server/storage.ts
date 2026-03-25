@@ -13,6 +13,20 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 // modify the interface with any CRUD methods
 // you might need
 
+export type Template = {
+  id: string;
+  name: string;
+  type: string;
+  lastUpdated: string;
+};
+
+export type Package = {
+  id: string;
+  type: string;
+  description: string;
+  documents: string[];
+};
+
 export type AiSettings = {
   provider: "openai" | "anthropic";
   apiKey: string;
@@ -63,17 +77,46 @@ export interface IStorage {
   deleteUser(id: string): Promise<void>;
   updateUserPassword(id: string, hashedPassword: string): Promise<void>;
   updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined>;
+  listTemplates(): Promise<Template[]>;
+  createTemplate(name: string, type: string): Promise<Template>;
+  updateTemplate(id: string, fields: { name?: string; type?: string }): Promise<Template | undefined>;
+  deleteTemplate(id: string): Promise<void>;
+  listPackages(): Promise<Package[]>;
+  createPackage(type: string, description: string, documents: string[]): Promise<Package>;
+  updatePackage(id: string, fields: { type?: string; description?: string; documents?: string[] }): Promise<Package | undefined>;
+  deletePackage(id: string): Promise<void>;
   getAiSettings(): Promise<AiSettings>;
   updateAiSettings(settings: Partial<AiSettings>): Promise<AiSettings>;
 }
 
+const DEFAULT_PACKAGES: Package[] = [
+  { id: "p1", type: "Web", description: "Standard pack for web build projects", documents: ["RACI Matrix Template", "RAID Log Master", "Communications Plan", "Project Kickoff Deck"] },
+  { id: "p2", type: "App", description: "Mobile app development docs", documents: ["RACI Matrix Template", "Risk Register Standard", "Communications Plan", "Project Kickoff Deck"] },
+  { id: "p3", type: "Strategy", description: "Lightweight pack for consulting", documents: ["RACI Matrix Template", "Communications Plan"] },
+  { id: "p4", type: "Design", description: "Design-only project governance", documents: ["RACI Matrix Template", "RAID Log Master", "Project Kickoff Deck"] },
+  { id: "p5", type: "Content", description: "Content and copywriting", documents: ["Communications Plan", "RAID Log Master"] },
+  { id: "p6", type: "XR/AR", description: "Experimental & XR projects", documents: ["RACI Matrix Template", "RAID Log Master", "Risk Register Standard", "Communications Plan", "Project Kickoff Deck"] },
+];
+
+const DEFAULT_TEMPLATES: Template[] = [
+  { id: "t1", name: "RACI Matrix Template", type: "Excel (.xlsx)", lastUpdated: "2024-02-15" },
+  { id: "t2", name: "RAID Log Master", type: "Excel (.xlsx)", lastUpdated: "2024-01-10" },
+  { id: "t3", name: "Communications Plan", type: "Word (.docx)", lastUpdated: "2024-03-01" },
+  { id: "t4", name: "Risk Register Standard", type: "Excel (.xlsx)", lastUpdated: "2023-11-20" },
+  { id: "t5", name: "Project Kickoff Deck", type: "PowerPoint (.pptx)", lastUpdated: "2024-03-05" },
+];
+
 export class MemStorage implements IStorage {
   private users: Map<string, User>;
   private aiSettings: AiSettings;
+  private templates: Map<string, Template>;
+  private packages: Map<string, Package>;
 
   constructor() {
     this.users = new Map();
     this.aiSettings = { ...DEFAULT_AI_SETTINGS };
+    this.templates = new Map(DEFAULT_TEMPLATES.map((t) => [t.id, t]));
+    this.packages = new Map(DEFAULT_PACKAGES.map((p) => [p.id, p]));
     // Seed initial admin user with hashed password
     const adminPassword = process.env.ADMIN_PASSWORD || "governance-admin";
     if (!process.env.ADMIN_PASSWORD) {
@@ -127,6 +170,52 @@ export class MemStorage implements IStorage {
     this.users.set(id, updated);
     const { password: _, ...safe } = updated;
     return safe;
+  }
+
+  async listTemplates(): Promise<Template[]> {
+    return Array.from(this.templates.values());
+  }
+
+  async createTemplate(name: string, type: string): Promise<Template> {
+    const id = randomUUID();
+    const t: Template = { id, name, type, lastUpdated: new Date().toISOString().slice(0, 10) };
+    this.templates.set(id, t);
+    return t;
+  }
+
+  async updateTemplate(id: string, fields: { name?: string; type?: string }): Promise<Template | undefined> {
+    const t = this.templates.get(id);
+    if (!t) return undefined;
+    const updated = { ...t, ...fields, lastUpdated: new Date().toISOString().slice(0, 10) };
+    this.templates.set(id, updated);
+    return updated;
+  }
+
+  async deleteTemplate(id: string): Promise<void> {
+    this.templates.delete(id);
+  }
+
+  async listPackages(): Promise<Package[]> {
+    return Array.from(this.packages.values());
+  }
+
+  async createPackage(type: string, description: string, documents: string[]): Promise<Package> {
+    const id = randomUUID();
+    const p: Package = { id, type, description, documents };
+    this.packages.set(id, p);
+    return p;
+  }
+
+  async updatePackage(id: string, fields: { type?: string; description?: string; documents?: string[] }): Promise<Package | undefined> {
+    const p = this.packages.get(id);
+    if (!p) return undefined;
+    const updated = { ...p, ...fields };
+    this.packages.set(id, updated);
+    return updated;
+  }
+
+  async deletePackage(id: string): Promise<void> {
+    this.packages.delete(id);
   }
 
   async getAiSettings(): Promise<AiSettings> {

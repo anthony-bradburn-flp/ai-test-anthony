@@ -251,6 +251,67 @@ export async function registerRoutes(
     res.json({ message: successMessage });
   });
 
+  // --- Packages ---
+
+  app.get("/api/admin/packages", requireAuth, async (_req, res) => {
+    res.json(await storage.listPackages());
+  });
+
+  app.post("/api/admin/packages", requireAuth, async (req, res) => {
+    const { type, description, documents } = req.body;
+    if (!type || !description || !Array.isArray(documents)) {
+      res.status(400).json({ error: "type, description, and documents are required" });
+      return;
+    }
+    res.status(201).json(await storage.createPackage(String(type).trim(), String(description).trim(), documents.map(String)));
+  });
+
+  app.patch("/api/admin/packages/:id", requireAuth, async (req, res) => {
+    const { type, description, documents } = req.body;
+    const updated = await storage.updatePackage(req.params.id, {
+      ...(type ? { type: String(type).trim() } : {}),
+      ...(description ? { description: String(description).trim() } : {}),
+      ...(Array.isArray(documents) ? { documents: documents.map(String) } : {}),
+    });
+    if (!updated) { res.status(404).json({ error: "Package not found" }); return; }
+    res.json(updated);
+  });
+
+  app.delete("/api/admin/packages/:id", requireAuth, async (req, res) => {
+    await storage.deletePackage(req.params.id);
+    res.json({ ok: true });
+  });
+
+  // --- Templates ---
+
+  app.get("/api/admin/templates", requireAuth, async (_req, res) => {
+    res.json(await storage.listTemplates());
+  });
+
+  app.post("/api/admin/templates", requireAuth, async (req, res) => {
+    const { name, type } = req.body;
+    if (!name || typeof name !== "string" || !type || typeof type !== "string") {
+      res.status(400).json({ error: "name and type are required" });
+      return;
+    }
+    res.status(201).json(await storage.createTemplate(name.trim(), type.trim()));
+  });
+
+  app.patch("/api/admin/templates/:id", requireAuth, async (req, res) => {
+    const { name, type } = req.body;
+    const updated = await storage.updateTemplate(req.params.id, {
+      ...(name ? { name: name.trim() } : {}),
+      ...(type ? { type: type.trim() } : {}),
+    });
+    if (!updated) { res.status(404).json({ error: "Template not found" }); return; }
+    res.json(updated);
+  });
+
+  app.delete("/api/admin/templates/:id", requireAuth, async (req, res) => {
+    await storage.deleteTemplate(req.params.id);
+    res.json({ ok: true });
+  });
+
   // --- Document Generation ---
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.

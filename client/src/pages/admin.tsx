@@ -126,8 +126,7 @@ export default function AdminPage() {
   const logout = useLogout();
   const { user: currentUser } = useAuth();
   const isAdmin = currentUser?.role === "admin";
-  const [templates] = useState(INITIAL_TEMPLATES);
-  const [packages] = useState(INITIAL_PACKAGES);
+
 
   // Add User form state
   const [showAddUser, setShowAddUser] = useState(false);
@@ -135,6 +134,24 @@ export default function AdminPage() {
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newRole, setNewRole] = useState<"admin" | "manager">("manager");
+
+  // Package state
+  const [showAddPackage, setShowAddPackage] = useState(false);
+  const [newPkgType, setNewPkgType] = useState("");
+  const [newPkgDesc, setNewPkgDesc] = useState("");
+  const [newPkgDocs, setNewPkgDocs] = useState("");
+  const [editingPackageId, setEditingPackageId] = useState<string | null>(null);
+  const [editPkgType, setEditPkgType] = useState("");
+  const [editPkgDesc, setEditPkgDesc] = useState("");
+  const [editPkgDocs, setEditPkgDocs] = useState("");
+
+  // Template state
+  const [showAddTemplate, setShowAddTemplate] = useState(false);
+  const [newTplName, setNewTplName] = useState("");
+  const [newTplType, setNewTplType] = useState("");
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [editTplName, setEditTplName] = useState("");
+  const [editTplType, setEditTplType] = useState("");
 
   // Edit User state
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -240,6 +257,162 @@ export default function AdminPage() {
     e.preventDefault();
     if (!editingUserId || !editUsername.trim()) return;
     updateUserMutation.mutate({ id: editingUserId, username: editUsername.trim(), email: editEmail.trim(), role: editRole, password: editPassword });
+  };
+
+  // Template API
+  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string };
+
+  const { data: templatesData, isLoading: templatesLoading } = useQuery<ApiTemplate[]>({
+    queryKey: ["/api/admin/templates"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/templates");
+      if (!res.ok) throw new Error("Failed to load templates");
+      return res.json();
+    },
+  });
+
+  const createTemplateMutation = useMutation({
+    mutationFn: async (data: { name: string; type: string }) => {
+      const res = await fetch("/api/admin/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to create template");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/templates"] });
+      setShowAddTemplate(false);
+      setNewTplName("");
+      setNewTplType("");
+      toast.success("Template created");
+    },
+    onError: () => toast.error("Failed to create template"),
+  });
+
+  const updateTemplateMutation = useMutation({
+    mutationFn: async (data: { id: string; name: string; type: string }) => {
+      const res = await fetch(`/api/admin/templates/${data.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: data.name, type: data.type }),
+      });
+      if (!res.ok) throw new Error("Failed to update template");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/templates"] });
+      setEditingTemplateId(null);
+      toast.success("Template updated");
+    },
+    onError: () => toast.error("Failed to update template"),
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/templates/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete template");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/templates"] });
+      toast.success("Template deleted");
+    },
+    onError: () => toast.error("Failed to delete template"),
+  });
+
+  const handleCreateTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTplName.trim() || !newTplType.trim()) return;
+    createTemplateMutation.mutate({ name: newTplName.trim(), type: newTplType.trim() });
+  };
+
+  const handleEditTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTemplateId || !editTplName.trim() || !editTplType.trim()) return;
+    updateTemplateMutation.mutate({ id: editingTemplateId, name: editTplName.trim(), type: editTplType.trim() });
+  };
+
+  // Package API
+  type ApiPackage = { id: string; type: string; description: string; documents: string[] };
+
+  const { data: packagesData, isLoading: packagesLoading } = useQuery<ApiPackage[]>({
+    queryKey: ["/api/admin/packages"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/packages");
+      if (!res.ok) throw new Error("Failed to load packages");
+      return res.json();
+    },
+  });
+
+  const createPackageMutation = useMutation({
+    mutationFn: async (data: { type: string; description: string; documents: string[] }) => {
+      const res = await fetch("/api/admin/packages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to create package");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/packages"] });
+      setShowAddPackage(false);
+      setNewPkgType(""); setNewPkgDesc(""); setNewPkgDocs("");
+      toast.success("Package created");
+    },
+    onError: () => toast.error("Failed to create package"),
+  });
+
+  const updatePackageMutation = useMutation({
+    mutationFn: async (data: { id: string; type: string; description: string; documents: string[] }) => {
+      const res = await fetch(`/api/admin/packages/${data.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: data.type, description: data.description, documents: data.documents }),
+      });
+      if (!res.ok) throw new Error("Failed to update package");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/packages"] });
+      setEditingPackageId(null);
+      toast.success("Package updated");
+    },
+    onError: () => toast.error("Failed to update package"),
+  });
+
+  const deletePackageMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/packages/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to delete package");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/packages"] });
+      toast.success("Package deleted");
+    },
+    onError: () => toast.error("Failed to delete package"),
+  });
+
+  const handleCreatePackage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPkgType.trim() || !newPkgDesc.trim()) return;
+    createPackageMutation.mutate({
+      type: newPkgType.trim(),
+      description: newPkgDesc.trim(),
+      documents: newPkgDocs.split(",").map((d) => d.trim()).filter(Boolean),
+    });
+  };
+
+  const handleEditPackage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPackageId) return;
+    updatePackageMutation.mutate({
+      id: editingPackageId,
+      type: editPkgType.trim(),
+      description: editPkgDesc.trim(),
+      documents: editPkgDocs.split(",").map((d) => d.trim()).filter(Boolean),
+    });
   };
 
   const handleCreateUser = (e: React.FormEvent) => {
@@ -406,11 +579,39 @@ export default function AdminPage() {
               title="Project Type Mappings"
               description="Define which templates are automatically selected for each project type."
               action={
-                <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground">
-                  <Plus className="h-4 w-4 mr-1" /> New Package
-                </Button>
+                !showAddPackage && (
+                  <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setShowAddPackage(true)}>
+                    <Plus className="h-4 w-4 mr-1" /> New Package
+                  </Button>
+                )
               }
             >
+              {showAddPackage && (
+                <form onSubmit={handleCreatePackage} className="p-5 border-b border-border space-y-4 bg-muted/20">
+                  <h3 className="text-sm font-semibold">New Package</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-pkg-type">Project Type <span className="text-destructive">*</span></Label>
+                      <Input id="new-pkg-type" value={newPkgType} onChange={(e) => setNewPkgType(e.target.value)} placeholder="e.g. Web" required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-pkg-desc">Description <span className="text-destructive">*</span></Label>
+                      <Input id="new-pkg-desc" value={newPkgDesc} onChange={(e) => setNewPkgDesc(e.target.value)} placeholder="Brief description" required />
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label htmlFor="new-pkg-docs">Required Documents <span className="text-destructive">*</span></Label>
+                      <Input id="new-pkg-docs" value={newPkgDocs} onChange={(e) => setNewPkgDocs(e.target.value)} placeholder="Comma-separated, e.g. RACI Matrix Template, RAID Log Master" required />
+                      <p className="text-xs text-muted-foreground">Separate document names with commas.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" size="sm" className="font-bold" disabled={createPackageMutation.isPending}>
+                      {createPackageMutation.isPending ? "Creating…" : "Create Package"}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setShowAddPackage(false)}>Cancel</Button>
+                  </div>
+                </form>
+              )}
               <Table>
                 <TableHeader className="bg-muted">
                   <TableRow>
@@ -421,28 +622,65 @@ export default function AdminPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {packages.map((pkg) => (
-                    <TableRow key={pkg.id}>
-                      <TableCell className="font-bold">{pkg.type}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{pkg.description}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1.5">
-                          {pkg.documents.map((doc, i) => (
-                            <Badge key={i} variant="secondary" className="bg-muted/80 text-xs font-medium border-border">
-                              {doc}
-                            </Badge>
-                          ))}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {packagesLoading ? (
+                    <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell></TableRow>
+                  ) : packagesData?.map((pkg) => {
+                    if (editingPackageId === pkg.id) {
+                      return (
+                        <TableRow key={pkg.id} className="bg-muted/20">
+                          <TableCell colSpan={4} className="p-4">
+                            <form onSubmit={handleEditPackage} className="space-y-3">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-pkg-type">Project Type <span className="text-destructive">*</span></Label>
+                                  <Input id="edit-pkg-type" value={editPkgType} onChange={(e) => setEditPkgType(e.target.value)} required />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-pkg-desc">Description <span className="text-destructive">*</span></Label>
+                                  <Input id="edit-pkg-desc" value={editPkgDesc} onChange={(e) => setEditPkgDesc(e.target.value)} required />
+                                </div>
+                                <div className="space-y-1.5 sm:col-span-2">
+                                  <Label htmlFor="edit-pkg-docs">Required Documents</Label>
+                                  <Input id="edit-pkg-docs" value={editPkgDocs} onChange={(e) => setEditPkgDocs(e.target.value)} placeholder="Comma-separated document names" />
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button type="submit" size="sm" className="font-bold" disabled={updatePackageMutation.isPending}>
+                                  {updatePackageMutation.isPending ? "Saving…" : "Save Changes"}
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setEditingPackageId(null)}>Cancel</Button>
+                              </div>
+                            </form>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    return (
+                      <TableRow key={pkg.id}>
+                        <TableCell className="font-bold">{pkg.type}</TableCell>
+                        <TableCell className="text-muted-foreground text-sm">{pkg.description}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1.5">
+                            {pkg.documents.map((doc, i) => (
+                              <Badge key={i} variant="secondary" className="bg-muted/80 text-xs font-medium border-border">{doc}</Badge>
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
+                              onClick={() => { setEditingPackageId(pkg.id); setEditPkgType(pkg.type); setEditPkgDesc(pkg.description); setEditPkgDocs(pkg.documents.join(", ")); setShowAddPackage(false); }}>
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => deletePackageMutation.mutate(pkg.id)} disabled={deletePackageMutation.isPending}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </SectionCard>
@@ -451,45 +689,98 @@ export default function AdminPage() {
           <TabsContent value="templates" className="space-y-6">
             <SectionCard
               title="Template Files"
-              description="Upload and manage the master source files used for governance generation."
+              description="Manage the governance document templates used for each project type."
               action={
-                <Button size="sm" className="font-bold bg-primary text-primary-foreground">
-                  <UploadCloud className="h-4 w-4 mr-1" /> Upload Template
-                </Button>
+                !showAddTemplate && (
+                  <Button size="sm" className="font-bold bg-primary text-primary-foreground" onClick={() => setShowAddTemplate(true)}>
+                    <Plus className="h-4 w-4 mr-1" /> Add Template
+                  </Button>
+                )
               }
             >
+              {showAddTemplate && (
+                <form onSubmit={handleCreateTemplate} className="p-5 border-b border-border space-y-4 bg-muted/20">
+                  <h3 className="text-sm font-semibold">New Template</h3>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-tpl-name">Template Name <span className="text-destructive">*</span></Label>
+                      <Input id="new-tpl-name" value={newTplName} onChange={(e) => setNewTplName(e.target.value)} placeholder="e.g. RACI Matrix Template" required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="new-tpl-type">File Type <span className="text-destructive">*</span></Label>
+                      <Input id="new-tpl-type" value={newTplType} onChange={(e) => setNewTplType(e.target.value)} placeholder="e.g. Excel (.xlsx)" required />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="submit" size="sm" className="font-bold" disabled={createTemplateMutation.isPending}>
+                      {createTemplateMutation.isPending ? "Creating…" : "Create Template"}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setShowAddTemplate(false)}>Cancel</Button>
+                  </div>
+                </form>
+              )}
               <Table>
                 <TableHeader className="bg-muted">
                   <TableRow>
                     <TableHead className="font-bold text-foreground">Template Name</TableHead>
                     <TableHead className="font-bold text-foreground">File Type</TableHead>
-                    <TableHead className="font-bold text-foreground">Size</TableHead>
                     <TableHead className="font-bold text-foreground">Last Updated</TableHead>
                     <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {templates.map((tpl) => (
-                    <TableRow key={tpl.id}>
-                      <TableCell className="font-semibold flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                        {tpl.name}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{tpl.type}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{tpl.size}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{tpl.lastUpdated}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary">
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive">
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {templatesLoading ? (
+                    <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell></TableRow>
+                  ) : templatesData?.map((tpl) => {
+                    if (editingTemplateId === tpl.id) {
+                      return (
+                        <TableRow key={tpl.id} className="bg-muted/20">
+                          <TableCell colSpan={4} className="p-4">
+                            <form onSubmit={handleEditTemplate} className="space-y-3">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-tpl-name">Template Name <span className="text-destructive">*</span></Label>
+                                  <Input id="edit-tpl-name" value={editTplName} onChange={(e) => setEditTplName(e.target.value)} required />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <Label htmlFor="edit-tpl-type">File Type <span className="text-destructive">*</span></Label>
+                                  <Input id="edit-tpl-type" value={editTplType} onChange={(e) => setEditTplType(e.target.value)} required />
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button type="submit" size="sm" className="font-bold" disabled={updateTemplateMutation.isPending}>
+                                  {updateTemplateMutation.isPending ? "Saving…" : "Save Changes"}
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setEditingTemplateId(null)}>Cancel</Button>
+                              </div>
+                            </form>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    return (
+                      <TableRow key={tpl.id}>
+                        <TableCell className="font-semibold flex items-center gap-2">
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                          {tpl.name}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{tpl.type}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{tpl.lastUpdated}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
+                              onClick={() => { setEditingTemplateId(tpl.id); setEditTplName(tpl.name); setEditTplType(tpl.type); setShowAddTemplate(false); }}>
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => deleteTemplateMutation.mutate(tpl.id)} disabled={deleteTemplateMutation.isPending}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </SectionCard>
