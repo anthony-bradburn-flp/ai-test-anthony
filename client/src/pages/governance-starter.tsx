@@ -858,6 +858,7 @@ export default function GovernanceStarterPage() {
                     <div>
                       <span className="font-semibold text-sm">Drop files here or click to browse</span>
                       <p className="text-xs mt-0.5">PDF, DOCX, XLSX, PPT, CSV, TXT — up to 10 MB each</p>
+                      <p className="text-xs mt-0.5 opacity-75">Note: only the first 15,000 characters of each document are passed to the AI.</p>
                     </div>
                   </div>
 
