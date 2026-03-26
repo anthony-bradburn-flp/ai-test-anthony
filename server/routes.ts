@@ -419,31 +419,42 @@ export async function registerRoutes(
       return;
     }
 
-    // Load all templates and find files for the required documents
+    // Load template contents and extract supporting doc text in parallel
     const allTemplates = await storage.listTemplates();
-    const templateContents: Array<{ name: string; content: string; format: string }> = [];
-    for (const docName of projectData.docsRequired) {
-      const tpl = allTemplates.find((t) => t.name === docName);
-      if (tpl?.filePath && existsSync(tpl.filePath)) {
-        const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
-        const ext = extname(tpl.originalFilename ?? "").toLowerCase();
-        const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
-        if (content) templateContents.push({ name: docName, content, format });
-      }
-    }
 
-    // Extract text from any supporting documents uploaded with the form
-    const supportingDocs: Array<{ name: string; content: string }> = [];
-    const truncatedDocs: string[] = [];
-    if (Array.isArray(req.body.supportingDocs)) {
-      for (const doc of req.body.supportingDocs) {
-        if (doc && typeof doc.name === "string" && typeof doc.content === "string") {
-          const { content, truncated } = await extractSupportingDocText(doc.name, doc.content);
-          if (content) supportingDocs.push({ name: doc.name, content });
-          if (truncated) truncatedDocs.push(doc.name);
+    const [templateContents, { supportingDocs, truncatedDocs }] = await Promise.all([
+      // Template files — read all required docs concurrently
+      Promise.all(
+        projectData.docsRequired.map(async (docName) => {
+          const tpl = allTemplates.find((t) => t.name === docName);
+          if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
+          const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
+          const ext = extname(tpl.originalFilename ?? "").toLowerCase();
+          const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+          return content ? { name: docName, content, format } : null;
+        })
+      ).then((results) => results.filter(Boolean) as Array<{ name: string; content: string; format: string }>),
+
+      // Supporting docs — extract text from all uploads concurrently
+      (async () => {
+        const docs: Array<{ name: string; content: string }> = [];
+        const truncated: string[] = [];
+        const rawDocs = Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [];
+        const valid = rawDocs.filter((d: unknown) =>
+          d && typeof (d as Record<string, unknown>).name === "string" &&
+          typeof (d as Record<string, unknown>).content === "string"
+        ) as Array<{ name: string; content: string }>;
+
+        const results = await Promise.all(
+          valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r })))
+        );
+        for (const { doc, content, truncated: wasTruncated } of results) {
+          if (content) docs.push({ name: doc.name, content });
+          if (wasTruncated) truncated.push(doc.name);
         }
-      }
-    }
+        return { supportingDocs: docs, truncatedDocs: truncated };
+      })(),
+    ]);
 
     const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
     const userPrompt = buildUserPrompt(projectData);
@@ -488,9 +499,8 @@ export async function registerRoutes(
         aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
       }
 
-      // Build actual .docx / .xlsx file buffers
-      const documents: Array<{ name: string; filename: string; format: string; content: string; preview: string }> = [];
-      for (const doc of aiDocs) {
+      // Build all .docx / .xlsx file buffers concurrently
+      const documents = await Promise.all(aiDocs.map(async (doc) => {
         const fmt = doc.format ?? "txt";
         let filename = doc.filename ?? `${doc.name}.txt`;
         let fileBuffer: Buffer;
@@ -510,8 +520,8 @@ export async function registerRoutes(
           preview = doc.content ?? "";
         }
 
-        documents.push({ name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview });
-      }
+        return { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview };
+      }));
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: documents.length, provider: settings.provider, supportingDocsCount: supportingDocs.length });
       res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider, truncatedDocs });
