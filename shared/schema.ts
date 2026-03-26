@@ -11,10 +11,16 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("manager"),
 });
 
+export const passwordSchema = z.string()
+  .min(8, "Password must be at least 8 characters")
+  .regex(/[A-Z]/, "Password must contain at least one capital letter")
+  .regex(/[0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/, "Password must contain at least one number or special character");
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,
 }).extend({
+  password: passwordSchema,
   email: z.string().email("Please enter a valid email").optional(),
   role: z.enum(["admin", "manager"]).default("manager"),
 });

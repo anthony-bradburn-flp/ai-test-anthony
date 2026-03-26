@@ -18,6 +18,12 @@ import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@
 const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
 if (!existsSync(TEMPLATES_DIR)) mkdirSync(TEMPLATES_DIR, { recursive: true });
 
+function audit(event: string, req: Request, detail?: Record<string, unknown>) {
+  const ip = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "unknown";
+  const user = req.session?.username ?? "anonymous";
+  console.log(`[AUDIT] ${new Date().toISOString()} | ${event} | user=${user} ip=${ip}${detail ? " | " + JSON.stringify(detail) : ""}`);
+}
+
 const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -30,6 +36,14 @@ const forgotPasswordRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { message: "Too many requests. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const generateRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: "Too many generation requests. Please wait a minute before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -75,18 +89,28 @@ export async function registerRoutes(
     const user = await storage.getUserByUsername(username);
     const valid = user ? await verifyPassword(password, user.password) : false;
     if (!user || !valid) {
+      audit("LOGIN_FAILED", req, { username });
       res.status(401).json({ message: "Invalid username or password" });
       return;
     }
     req.session.userId = user.id;
     req.session.username = user.username;
     req.session.role = user.role;
+    audit("LOGIN_SUCCESS", req, { username });
     res.json({ username: user.username, role: user.role });
   });
 
   app.post("/api/auth/logout", (req, res) => {
-    req.session.destroy(() => {});
-    res.json({ ok: true });
+    audit("LOGOUT", req);
+    req.session.destroy((err) => {
+      if (err) {
+        console.error("[auth] Session destroy error:", err);
+        res.status(500).json({ error: "Logout failed" });
+        return;
+      }
+      res.clearCookie("connect.sid");
+      res.json({ ok: true });
+    });
   });
 
   app.get("/api/auth/me", (req, res) => {
@@ -112,12 +136,13 @@ export async function registerRoutes(
       ...(systemPrompt !== undefined && { systemPrompt }),
       ...(companyName !== undefined && { companyName }),
     });
+    audit("AI_SETTINGS_UPDATED", req, { provider: updated.provider });
     res.json({ ...updated, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
   });
 
   // --- Training Document ---
 
-  app.post("/api/admin/ai-settings/training-doc", requireAuth, async (req, res) => {
+  app.post("/api/admin/ai-settings/training-doc", requireAdmin, async (req, res) => {
     const { content, filename, size } = req.body;
 
     if (!content || typeof content !== "string") {
@@ -153,7 +178,7 @@ export async function registerRoutes(
     });
   });
 
-  app.delete("/api/admin/ai-settings/training-doc", requireAuth, async (_req, res) => {
+  app.delete("/api/admin/ai-settings/training-doc", requireAdmin, async (_req, res) => {
     await storage.updateAiSettings({
       trainingDocContent: null,
       trainingDocFilename: null,
@@ -184,6 +209,7 @@ export async function registerRoutes(
     const hashed = await hashPassword(parsed.data.password);
     const user = await storage.createUser({ ...parsed.data, password: hashed });
     const { password: _, ...safeUser } = user;
+    audit("USER_CREATED", req, { newUser: parsed.data.username, role: parsed.data.role });
     res.status(201).json(safeUser);
   });
 
@@ -201,7 +227,7 @@ export async function registerRoutes(
         return;
       }
     }
-    const { username, email, role, password } = req.body;
+    const { username, email, role, password, currentPassword } = req.body;
     if (username && username !== target.username) {
       const existing = await storage.getUserByUsername(username);
       if (existing) { res.status(409).json({ error: "Username already exists" }); return; }
@@ -212,6 +238,18 @@ export async function registerRoutes(
       ...(role ? { role } : {}),
     });
     if (password) {
+      // Require current password verification when changing own password
+      if (req.params.id === req.session.userId) {
+        if (!currentPassword) {
+          res.status(400).json({ error: "Current password is required to set a new password" });
+          return;
+        }
+        const valid = await verifyPassword(currentPassword, target.password);
+        if (!valid) {
+          res.status(403).json({ error: "Current password is incorrect" });
+          return;
+        }
+      }
       const hashed = await hashPassword(password);
       await storage.updateUserPassword(req.params.id, hashed);
     }
@@ -229,6 +267,7 @@ export async function registerRoutes(
       res.status(403).json({ error: "Managers can only delete manager users" });
       return;
     }
+    audit("USER_DELETED", req, { deletedUser: target.username, role: target.role });
     await storage.deleteUser(req.params.id);
     res.json({ ok: true });
   });
@@ -324,6 +363,11 @@ export async function registerRoutes(
     const template = await storage.getTemplate(req.params.id);
     if (!template) { res.status(404).json({ error: "Template not found" }); return; }
     const ext = extname(originalFilename).toLowerCase();
+    const ALLOWED_TEMPLATE_EXTS = [".docx", ".xlsx", ".xls", ".txt", ".md"];
+    if (!ALLOWED_TEMPLATE_EXTS.includes(ext)) {
+      res.status(400).json({ error: `File type "${ext}" not allowed. Accepted: ${ALLOWED_TEMPLATE_EXTS.join(", ")}` });
+      return;
+    }
     const filePath = join(TEMPLATES_DIR, `${req.params.id}${ext}`);
     const buffer = Buffer.from(fileData, "base64");
     if (buffer.length > 10 * 1024 * 1024) {
@@ -344,7 +388,7 @@ export async function registerRoutes(
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
 
-  app.post("/api/generate", requireAuth, async (req, res) => {
+  app.post("/api/generate", requireAuth, generateRateLimit, async (req, res) => {
     const parsed = generateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });
@@ -356,8 +400,8 @@ export async function registerRoutes(
 
     const activeKey = settings.provider === "anthropic" ? getAnthropicKey() : getOpenAIKey();
     if (!activeKey) {
-      const param = settings.provider === "anthropic" ? "/pm-governance/anthropic-api-key" : "/pm-governance/openai-api-key";
-      res.status(400).json({ error: `No API key available. Add it to AWS Parameter Store at: ${param}` });
+      console.error(`[generate] No API key available for provider: ${settings.provider}`);
+      res.status(400).json({ error: "AI generation is not configured. Contact your administrator." });
       return;
     }
 
@@ -442,9 +486,11 @@ export async function registerRoutes(
         documents.push({ name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview });
       }
 
+      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: documents.length, provider: settings.provider });
       res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
+      audit("GENERATE_FAILED", req, { error: message });
       res.status(502).json({ error: message });
     }
   });
@@ -463,6 +509,8 @@ export async function registerRoutes(
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename="governance-documents.zip"`);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store, max-age=0");
     res.send(zipBuffer);
   });
 
