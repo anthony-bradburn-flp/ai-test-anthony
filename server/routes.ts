@@ -429,11 +429,13 @@ export async function registerRoutes(
 
     // Extract text from any supporting documents uploaded with the form
     const supportingDocs: Array<{ name: string; content: string }> = [];
+    const truncatedDocs: string[] = [];
     if (Array.isArray(req.body.supportingDocs)) {
       for (const doc of req.body.supportingDocs) {
         if (doc && typeof doc.name === "string" && typeof doc.content === "string") {
-          const text = await extractSupportingDocText(doc.name, doc.content);
-          if (text) supportingDocs.push({ name: doc.name, content: text });
+          const { content, truncated } = await extractSupportingDocText(doc.name, doc.content);
+          if (content) supportingDocs.push({ name: doc.name, content });
+          if (truncated) truncatedDocs.push(doc.name);
         }
       }
     }
@@ -507,7 +509,7 @@ export async function registerRoutes(
       }
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: documents.length, provider: settings.provider, supportingDocsCount: supportingDocs.length });
-      res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider });
+      res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider, truncatedDocs });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
       audit("GENERATE_FAILED", req, { error: message });
@@ -537,31 +539,33 @@ export async function registerRoutes(
   return httpServer;
 }
 
-async function extractSupportingDocText(filename: string, base64Content: string): Promise<string> {
+async function extractSupportingDocText(filename: string, base64Content: string): Promise<{ content: string; truncated: boolean }> {
   const ext = extname(filename).toLowerCase();
-  const MAX_CHARS = 15000; // cap per doc to avoid bloating context
+  const MAX_CHARS = 15000;
   try {
     const buffer = Buffer.from(base64Content, "base64");
+    let full = "";
     if (ext === ".docx") {
       const result = await mammoth.extractRawText({ buffer });
-      return result.value.slice(0, MAX_CHARS);
-    }
-    if (ext === ".xlsx" || ext === ".xls") {
+      full = result.value;
+    } else if (ext === ".xlsx" || ext === ".xls") {
       const workbook = XLSX.read(buffer, { type: "buffer" });
       const lines: string[] = [];
       for (const sheetName of workbook.SheetNames) {
         lines.push(`=== ${sheetName} ===`);
         lines.push(XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]));
       }
-      return lines.join("\n").slice(0, MAX_CHARS);
+      full = lines.join("\n");
+    } else if ([".txt", ".md", ".csv"].includes(ext)) {
+      full = buffer.toString("utf8");
+    } else {
+      // PDF / PPT / PPTX — cannot extract text without additional libraries
+      return { content: `[File attached: ${filename} — content not extracted]`, truncated: false };
     }
-    if ([".txt", ".md", ".csv"].includes(ext)) {
-      return buffer.toString("utf8").slice(0, MAX_CHARS);
-    }
-    // PDF / PPT / PPTX — cannot extract text without additional libraries
-    return `[File attached: ${filename} — content not extracted]`;
+    const truncated = full.length > MAX_CHARS;
+    return { content: truncated ? full.slice(0, MAX_CHARS) : full, truncated };
   } catch {
-    return `[File attached: ${filename} — extraction failed]`;
+    return { content: `[File attached: ${filename} — extraction failed]`, truncated: false };
   }
 }
 

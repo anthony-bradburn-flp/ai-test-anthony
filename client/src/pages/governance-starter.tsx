@@ -235,6 +235,11 @@ export default function GovernanceStarterPage() {
           ? "Training document standards applied."
           : "No training document — configure one in Admin > AI Settings.",
       });
+      if (result.truncatedDocs?.length) {
+        for (const name of result.truncatedDocs) {
+          toast.warning(`${name} exceeds 15,000 character limit — only the first 15,000 characters were passed to the AI.`);
+        }
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Generation failed — check server logs.";
       setGenerateError(msg);
