@@ -10,6 +10,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } from "docx";
 import { storage, verifyPassword, hashPassword } from "./storage";
 import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey } from "./secrets";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
@@ -362,12 +363,14 @@ export async function registerRoutes(
 
     // Load all templates and find files for the required documents
     const allTemplates = await storage.listTemplates();
-    const templateContents: Array<{ name: string; content: string }> = [];
+    const templateContents: Array<{ name: string; content: string; format: string }> = [];
     for (const docName of projectData.docsRequired) {
       const tpl = allTemplates.find((t) => t.name === docName);
       if (tpl?.filePath && existsSync(tpl.filePath)) {
         const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
-        if (content) templateContents.push({ name: docName, content });
+        const ext = extname(tpl.originalFilename ?? "").toLowerCase();
+        const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+        if (content) templateContents.push({ name: docName, content, format });
       }
     }
 
@@ -389,7 +392,7 @@ export async function registerRoutes(
       } else {
         const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
         const completion = await client.chat.completions.create({
-          model: "gpt-4o",
+          model: "gpt-5.2",
           max_tokens: 8192,
           messages: [
             { role: "system", content: systemPrompt },
@@ -401,17 +404,42 @@ export async function registerRoutes(
 
       // Parse structured JSON response from AI
       const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
-      let documents: Array<{ name: string; filename: string; content: string }> = [];
+      type AiDoc = { name: string; filename: string; format?: string; content?: string; sheets?: Array<{ name: string; headers: string[]; rows: string[][] }> };
+      let aiDocs: AiDoc[] = [];
       if (jsonMatch) {
         try {
           const parsed = JSON.parse(jsonMatch[1]);
-          documents = parsed.documents ?? [];
+          aiDocs = parsed.documents ?? [];
         } catch {
-          // Fallback: treat entire response as a single document
-          documents = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, content: aiContent }];
+          aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
         }
       } else {
-        documents = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, content: aiContent }];
+        aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
+      }
+
+      // Build actual .docx / .xlsx file buffers
+      const documents: Array<{ name: string; filename: string; format: string; content: string; preview: string }> = [];
+      for (const doc of aiDocs) {
+        const fmt = doc.format ?? "txt";
+        let filename = doc.filename ?? `${doc.name}.txt`;
+        let fileBuffer: Buffer;
+        let preview: string;
+
+        if (fmt === "xlsx" && doc.sheets?.length) {
+          fileBuffer = buildXlsxBuffer(doc.sheets);
+          filename = filename.replace(/\.[^.]+$/, ".xlsx");
+          preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
+        } else if (fmt === "docx" && doc.content) {
+          fileBuffer = await buildDocxBuffer(doc.content);
+          filename = filename.replace(/\.[^.]+$/, ".docx");
+          preview = doc.content;
+        } else {
+          fileBuffer = Buffer.from(doc.content ?? "", "utf8");
+          filename = filename.replace(/\.[^.]+$/, ".txt");
+          preview = doc.content ?? "";
+        }
+
+        documents.push({ name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview });
       }
 
       res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider });
@@ -422,14 +450,15 @@ export async function registerRoutes(
   });
 
   app.post("/api/generate/download", requireAuth, async (req, res) => {
-    const { documents } = req.body as { documents: Array<{ name: string; filename: string; content: string }> };
+    const { documents } = req.body as { documents: Array<{ name: string; filename: string; format: string; content: string }> };
     if (!Array.isArray(documents) || documents.length === 0) {
       res.status(400).json({ error: "No documents provided" });
       return;
     }
     const zip = new JSZip();
     for (const doc of documents) {
-      zip.file(doc.filename.endsWith(".txt") ? doc.filename : doc.filename.replace(/\.[^.]+$/, ".txt"), doc.content);
+      const buffer = Buffer.from(doc.content, "base64");
+      zip.file(doc.filename, buffer);
     }
     const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
     res.setHeader("Content-Type", "application/zip");
@@ -470,7 +499,7 @@ function buildSystemPrompt(
   basePrompt: string,
   companyName: string,
   trainingDocContent: string | null,
-  templateContents: Array<{ name: string; content: string }> = []
+  templateContents: Array<{ name: string; content: string; format: string }> = []
 ): string {
   let prompt = basePrompt.replace(/Flipside Group/g, companyName);
 
@@ -480,13 +509,45 @@ function buildSystemPrompt(
     prompt += `\n\n<TRAINING_DOCUMENT>\n${trainingDocContent}\n</TRAINING_DOCUMENT>`;
   }
 
-  if (templateContents.length > 0) {
-    prompt += `\n\nYou must generate one populated document for each template listed below. Return your response as valid JSON in this exact format:\n\`\`\`json\n{"documents":[{"name":"Template Name","filename":"SheetRef_Client_TemplateName.txt","content":"...full populated content..."}]}\n\`\`\`\n\nDo not include any text outside the JSON block.`;
-    for (const tpl of templateContents) {
-      prompt += `\n\n<TEMPLATE name="${tpl.name}">\n${tpl.content}\n</TEMPLATE>`;
+  const formatInstructions = `
+Return ONLY valid JSON — no text outside the JSON block:
+\`\`\`json
+{
+  "documents": [
+    {
+      "name": "Document Name",
+      "filename": "SheetRef_Client_DocName.docx",
+      "format": "docx",
+      "content": "# Heading 1\\n\\nParagraph text.\\n\\n## Heading 2\\n\\n- Bullet one\\n- Bullet two\\n\\n| Column A | Column B |\\n|----------|----------|\\n| Value 1  | Value 2  |"
+    },
+    {
+      "name": "Spreadsheet Name",
+      "filename": "SheetRef_Client_SpreadsheetName.xlsx",
+      "format": "xlsx",
+      "sheets": [
+        {
+          "name": "Sheet Name",
+          "headers": ["Column 1", "Column 2", "Column 3"],
+          "rows": [["Value A", "Value B", "Value C"]]
+        }
+      ]
     }
-  } else if (templateContents.length === 0) {
-    prompt += `\n\nReturn your response as valid JSON in this exact format:\n\`\`\`json\n{"documents":[{"name":"Document Name","filename":"SheetRef_Client_DocumentName.txt","content":"...full populated content..."}]}\n\`\`\`\n\nGenerate one document entry per item in the Documents Required list. Do not include any text outside the JSON block.`;
+  ]
+}
+\`\`\`
+
+Formatting rules:
+- Word documents (format: "docx"): Write the content field as markdown. Use # for H1, ## for H2, ### for H3, - for bullet points, and | col | col | pipe-delimited rows for tables. Include a separator row (|---|---|) after table headers.
+- Excel spreadsheets (format: "xlsx"): Omit the content field entirely. Use the sheets array. Provide rich, complete data with all relevant rows populated.
+- Choose the format for each document based on its template type shown below.`;
+
+  if (templateContents.length > 0) {
+    prompt += `\n\nGenerate one fully populated document for each template below.${formatInstructions}`;
+    for (const tpl of templateContents) {
+      prompt += `\n\n<TEMPLATE name="${tpl.name}" format="${tpl.format}">\n${tpl.content}\n</TEMPLATE>`;
+    }
+  } else {
+    prompt += `\n\nGenerate one document per item in the Documents Required list.${formatInstructions}`;
   }
 
   return prompt;
@@ -522,4 +583,71 @@ function buildUserPrompt(data: GenerateRequest): string {
   ];
 
   return `<INTAKE_FORM_DATA>\n${lines.join("\n")}\n</INTAKE_FORM_DATA>`;
+}
+
+// ── Document file builders ────────────────────────────────────────────────────
+
+async function buildDocxBuffer(markdown: string): Promise<Buffer> {
+  const lines = markdown.split("\n");
+  const children: (Paragraph | Table)[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.startsWith("### ")) {
+      children.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3 }));
+      i++;
+    } else if (line.startsWith("## ")) {
+      children.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2 }));
+      i++;
+    } else if (line.startsWith("# ")) {
+      children.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1 }));
+      i++;
+    } else if (/^[-*] /.test(line)) {
+      children.push(new Paragraph({ text: line.slice(2), bullet: { level: 0 } }));
+      i++;
+    } else if (line.startsWith("|")) {
+      // Collect consecutive table lines
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].startsWith("|")) {
+        // Skip markdown separator rows (|---|---|)
+        if (!/^\|[-:\s|]+\|$/.test(lines[i])) tableLines.push(lines[i]);
+        i++;
+      }
+      if (tableLines.length > 0) {
+        const rows = tableLines.map((row) =>
+          row.split("|").filter((_, idx, arr) => idx > 0 && idx < arr.length - 1).map((c) => c.trim())
+        );
+        const table = new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: rows.map((cells, rowIdx) =>
+            new TableRow({
+              children: cells.map((cell) =>
+                new TableCell({
+                  children: [new Paragraph({ children: [new TextRun({ text: cell, bold: rowIdx === 0 })] })],
+                })
+              ),
+            })
+          ),
+        });
+        children.push(table);
+      }
+    } else {
+      children.push(new Paragraph({ text: line }));
+      i++;
+    }
+  }
+
+  const doc = new Document({ sections: [{ children }] });
+  return Packer.toBuffer(doc);
+}
+
+function buildXlsxBuffer(sheets: Array<{ name: string; headers: string[]; rows: string[][] }>): Buffer {
+  const workbook = XLSX.utils.book_new();
+  for (const sheet of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet([sheet.headers, ...sheet.rows]);
+    XLSX.utils.book_append_sheet(workbook, ws, sheet.name.slice(0, 31)); // Excel sheet name max 31 chars
+  }
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }

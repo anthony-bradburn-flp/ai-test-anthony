@@ -84,7 +84,7 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-type GeneratedDocument = { name: string; filename: string; content: string };
+type GeneratedDocument = { name: string; filename: string; format: string; content: string; preview: string };
 
 export default function GovernanceStarterPage() {
   const [uploads, setUploads] = useState<File[]>([]);
@@ -902,7 +902,7 @@ export default function GovernanceStarterPage() {
                   <span className="text-xs text-muted-foreground">{doc.filename}</span>
                 </div>
                 <pre className="p-4 text-xs text-foreground whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-background">
-                  {doc.content}
+                  {doc.preview}
                 </pre>
               </div>
             ))}
