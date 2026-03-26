@@ -86,6 +86,18 @@ type FormValues = z.infer<typeof formSchema>;
 
 type GeneratedDocument = { name: string; filename: string; format: string; content: string; preview: string };
 
+function SectionCard({ id, title, badge, children }: { id: string; title: string; badge: string; children: React.ReactNode }) {
+  return (
+    <section className="overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_6px_18px_rgba(17,24,39,0.08)]">
+      <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-[14px] dark:bg-muted/80">
+        <h2 id={id} className="text-base font-bold text-foreground m-0">{title}</h2>
+        <span className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground">{badge}</span>
+      </div>
+      <div className="p-4">{children}</div>
+    </section>
+  );
+}
+
 export default function GovernanceStarterPage() {
   const [uploads, setUploads] = useState<File[]>([]);
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
@@ -207,30 +219,6 @@ export default function GovernanceStarterPage() {
     setUploads([]);
     toast("Reset", { description: "Cleared form data." });
   };
-
-  const SectionCard = ({
-    id,
-    title,
-    badge,
-    children,
-  }: {
-    id: string;
-    title: string;
-    badge: string;
-    children: React.ReactNode;
-  }) => (
-    <section className="overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_6px_18px_rgba(17,24,39,0.08)]">
-      <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-[14px] dark:bg-muted/80">
-        <h2 id={id} className="text-base font-bold text-foreground m-0">
-          {title}
-        </h2>
-        <span className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground">
-          {badge}
-        </span>
-      </div>
-      <div className="p-4">{children}</div>
-    </section>
-  );
 
   return (
     <div className="min-h-dvh bg-background text-foreground font-sans selection:bg-primary/30">
