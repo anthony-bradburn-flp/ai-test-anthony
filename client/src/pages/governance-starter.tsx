@@ -324,16 +324,23 @@ export default function GovernanceStarterPage() {
   };
 
   const downloadSingleDoc = (doc: GeneratedDocument) => {
-    const byteChars = atob(doc.content);
-    const bytes = new Uint8Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "application/octet-stream" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = doc.filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const byteChars = atob(doc.content);
+      const bytes = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = doc.filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 200);
+    } catch (e) {
+      toast.error("Download failed", { description: e instanceof Error ? e.message : "Could not create file" });
+    }
   };
 
   const handleReset = () => {
