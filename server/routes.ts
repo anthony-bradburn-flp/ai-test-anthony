@@ -397,7 +397,12 @@ export async function registerRoutes(
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
 
-  app.post("/api/generate", requireAuth, generateRateLimit, async (req, res) => {
+  app.post("/api/generate", requireAuth, generateRateLimit, (req, res, next) => {
+    res.setTimeout(180_000, () => {
+      res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
+    });
+    next();
+  }, async (req, res) => {
     const parsed = generateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });

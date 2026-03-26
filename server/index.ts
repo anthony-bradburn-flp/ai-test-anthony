@@ -113,6 +113,10 @@ app.use((req, res, next) => {
         for (const key of ["systemPrompt", "userPrompt", "trainingDocContent", "apiKey"]) {
           if (key in safe) safe[key] = "[redacted]";
         }
+        // Redact base64 document content — can be hundreds of KB
+        if (Array.isArray(safe.documents)) {
+          safe.documents = safe.documents.map((d: Record<string, unknown>) => ({ ...d, content: "[base64]" }));
+        }
         logLine += ` :: ${JSON.stringify(safe)}`;
       }
 
