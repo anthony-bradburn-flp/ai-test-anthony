@@ -247,17 +247,47 @@ export default function GovernanceStarterPage() {
         const err = await res.json();
         throw new Error(err.error ?? "Generation request failed");
       }
-      setGeneratingStage("Building document files…");
-      const result = await res.json();
-      setGeneratedDocs(result.documents ?? []);
-      toast.success("Documents generated", {
-        description: result.trainingDocAttached
-          ? "Training document standards applied."
-          : "No training document — configure one in Admin > AI Settings.",
-      });
-      if (result.truncatedDocs?.length) {
-        for (const name of result.truncatedDocs) {
-          toast.warning(`${name} exceeds 15,000 character limit — only the first 15,000 characters were passed to the AI.`);
+
+      // Read the NDJSON stream — each line is a JSON event
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let totalExpected = 0;
+      let docsReceived = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!; // keep any incomplete trailing line
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+
+          if (event.type === "start") {
+            totalExpected = event.count;
+            setGeneratingStage(`Building ${totalExpected} document${totalExpected !== 1 ? "s" : ""}…`);
+            setGeneratedDocs([]); // open the results section immediately
+            if (event.truncatedDocs?.length) {
+              for (const name of event.truncatedDocs) {
+                toast.warning(`${name} exceeds 15,000 character limit — only the first 15,000 characters were passed to the AI.`);
+              }
+            }
+          } else if (event.type === "document") {
+            docsReceived++;
+            setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
+            setGeneratedDocs((prev) => [...(prev ?? []), event.document]);
+          } else if (event.type === "done") {
+            toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`, {
+              description: event.trainingDocAttached
+                ? "Training document standards applied."
+                : "No training document — configure one in Admin > AI Settings.",
+            });
+          } else if (event.type === "error") {
+            throw new Error(event.error ?? "Generation failed");
+          }
         }
       }
     } catch (e: unknown) {
@@ -291,6 +321,19 @@ export default function GovernanceStarterPage() {
     } finally {
       setIsDownloading(false);
     }
+  };
+
+  const downloadSingleDoc = (doc: GeneratedDocument) => {
+    const byteChars = atob(doc.content);
+    const bytes = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = doc.filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleReset = () => {
@@ -1049,19 +1092,36 @@ export default function GovernanceStarterPage() {
           );
         })()}
 
-        {generatedDocs && generatedDocs.length > 0 && (
+        {generatedDocs !== null && (
           <div className="mt-8 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-foreground">Generated Documents</h2>
-              <Button onClick={handleDownload} disabled={isDownloading} className="font-bold">
-                {isDownloading ? "Preparing…" : "Download All (.zip)"}
-              </Button>
+              <h2 className="text-lg font-bold text-foreground">
+                Generated Documents
+                {isGenerating && generatedDocs.length > 0 && (
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">({generatedDocs.length} ready)</span>
+                )}
+              </h2>
+              {!isGenerating && generatedDocs.length > 1 && (
+                <Button onClick={handleDownload} disabled={isDownloading} className="font-bold">
+                  {isDownloading ? "Preparing…" : "Download All (.zip)"}
+                </Button>
+              )}
             </div>
+            {generatedDocs.length === 0 && (
+              <div className="rounded-[14px] border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                Documents will appear here as they are ready…
+              </div>
+            )}
             {generatedDocs.map((doc, i) => (
               <div key={i} className="rounded-[14px] border border-border bg-card overflow-hidden">
-                <div className="border-b border-border bg-muted px-4 py-3 flex items-center justify-between">
-                  <span className="font-semibold text-sm text-foreground">{doc.name}</span>
-                  <span className="text-xs text-muted-foreground">{doc.filename}</span>
+                <div className="border-b border-border bg-muted px-4 py-3 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="font-semibold text-sm text-foreground">{doc.name}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">{doc.filename}</span>
+                  </div>
+                  <Button size="sm" variant="outline" className="shrink-0 font-semibold" onClick={() => downloadSingleDoc(doc)}>
+                    Download
+                  </Button>
                 </div>
                 <pre className="p-4 text-xs text-foreground whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-background">
                   {doc.preview}
