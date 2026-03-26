@@ -18,9 +18,9 @@ export function useLogin() {
       const res = await apiRequest("POST", "/api/auth/login", { username, password });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      setLocation("/admin");
+      setLocation(data.role === "user" ? "/" : "/admin");
     },
   });
 }
