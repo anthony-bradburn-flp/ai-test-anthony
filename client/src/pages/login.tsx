@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Link, Redirect } from "wouter";
+import { Link, Redirect, useSearch } from "wouter";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,8 @@ export default function LoginPage() {
   const [forgotMessage, setForgotMessage] = useState("");
   const { user, isLoading } = useAuth();
   const login = useLogin();
+  const search = useSearch();
+  const accessDenied = new URLSearchParams(search).get("reason") === "admin-access";
 
   const forgotPassword = useMutation({
     mutationFn: async (u: string) => {
@@ -31,7 +33,7 @@ export default function LoginPage() {
   });
 
   if (isLoading) return null;
-  if (user) return <Redirect to="/admin" />;
+  if (user) return <Redirect to={user.role === "user" ? "/" : "/admin"} />;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +74,11 @@ export default function LoginPage() {
                 <Lock className="h-5 w-5 text-primary" />
               </div>
               <CardTitle className="text-xl">Admin Login</CardTitle>
-              <CardDescription>Sign in to access the admin panel</CardDescription>
+              <CardDescription>
+                {accessDenied
+                  ? "Only admin and manager users can access the admin section."
+                  : "Sign in to access the admin panel"}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="grid gap-4">

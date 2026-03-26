@@ -13,6 +13,7 @@ function ProtectedAdminRoute() {
   const { user, isLoading } = useAuth();
   if (isLoading) return null;
   if (!user) return <Redirect to="/login" />;
+  if (user.role === "user") return <Redirect to="/?reason=admin-access" />;
   return <AdminPage />;
 }
 

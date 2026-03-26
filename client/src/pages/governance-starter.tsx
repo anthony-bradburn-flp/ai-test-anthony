@@ -100,7 +100,7 @@ function SectionCard({ id, title, badge, children }: { id: string; title: string
 }
 
 export default function GovernanceStarterPage() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isLoading, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
   const [uploads, setUploads] = useState<File[]>([]);
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
@@ -251,11 +251,15 @@ export default function GovernanceStarterPage() {
               Capture project information, stakeholders, and documentation needs.
             </p>
           </div>
-          <Link href="/admin">
-            <Button variant="outline" className="font-bold">
-              Admin Login
+          {user && (user.role === "admin" || user.role === "manager") ? (
+            <Link href="/admin">
+              <Button variant="outline" className="font-bold">Admin</Button>
+            </Link>
+          ) : (
+            <Button variant="outline" className="font-bold" onClick={() => navigate("/login?reason=admin-access")}>
+              Admin
             </Button>
-          </Link>
+          )}
         </div>
       </header>
 

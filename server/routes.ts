@@ -54,8 +54,13 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  if (req.session.userId && req.session.role === "admin") return next();
+  if (req.session.userId && (req.session.role === "admin" || req.session.role === "manager")) return next();
   res.status(403).json({ message: "Admin access required" });
+}
+
+function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  if (req.session.userId && req.session.role === "admin") return next();
+  res.status(403).json({ message: "Super admin access required" });
 }
 
 async function sendEmail(to: string, subject: string, text: string) {
@@ -123,12 +128,12 @@ export async function registerRoutes(
 
   // --- AI Settings ---
 
-  app.get("/api/admin/ai-settings", requireAuth, async (_req, res) => {
+  app.get("/api/admin/ai-settings", requireAdmin, async (_req, res) => {
     const settings = await storage.getAiSettings();
     res.json({ ...settings, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
   });
 
-  app.post("/api/admin/ai-settings", requireAdmin, async (req, res) => {
+  app.post("/api/admin/ai-settings", requireSuperAdmin, async (req, res) => {
     const { provider, orgId, systemPrompt, companyName } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
@@ -142,7 +147,7 @@ export async function registerRoutes(
 
   // --- Training Document ---
 
-  app.post("/api/admin/ai-settings/training-doc", requireAdmin, async (req, res) => {
+  app.post("/api/admin/ai-settings/training-doc", requireSuperAdmin, async (req, res) => {
     const { content, filename, size } = req.body;
 
     if (!content || typeof content !== "string") {
@@ -178,7 +183,7 @@ export async function registerRoutes(
     });
   });
 
-  app.delete("/api/admin/ai-settings/training-doc", requireAdmin, async (_req, res) => {
+  app.delete("/api/admin/ai-settings/training-doc", requireSuperAdmin, async (_req, res) => {
     await storage.updateAiSettings({
       trainingDocContent: null,
       trainingDocFilename: null,
@@ -190,15 +195,19 @@ export async function registerRoutes(
 
   // --- User Management ---
 
-  app.get("/api/admin/users", requireAuth, async (_req, res) => {
+  app.get("/api/admin/users", requireAdmin, async (_req, res) => {
     const users = await storage.listUsers();
     res.json(users);
   });
 
-  app.post("/api/admin/users", requireAuth, async (req, res) => {
+  app.post("/api/admin/users", requireAdmin, async (req, res) => {
     const parsed = insertUserSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });
+      return;
+    }
+    if (req.session.role !== "admin" && parsed.data.role === "admin") {
+      res.status(403).json({ error: "Managers cannot create admin users" });
       return;
     }
     const existing = await storage.getUserByUsername(parsed.data.username);
@@ -213,16 +222,16 @@ export async function registerRoutes(
     res.status(201).json(safeUser);
   });
 
-  app.patch("/api/admin/users/:id", requireAuth, async (req, res) => {
+  app.patch("/api/admin/users/:id", requireAdmin, async (req, res) => {
     const target = await storage.getUser(req.params.id);
     if (!target) { res.status(404).json({ error: "User not found" }); return; }
     const callerRole = req.session.role;
     if (callerRole !== "admin") {
-      if (target.role !== "manager") {
-        res.status(403).json({ error: "Managers can only edit manager users" });
+      if (target.role === "admin") {
+        res.status(403).json({ error: "Managers cannot edit admin users" });
         return;
       }
-      if (req.body.role && req.body.role !== "manager") {
+      if (req.body.role === "admin") {
         res.status(403).json({ error: "Managers cannot assign the admin role" });
         return;
       }
@@ -256,15 +265,15 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  app.delete("/api/admin/users/:id", requireAuth, async (req, res) => {
+  app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
     if (req.params.id === req.session.userId) {
       res.status(400).json({ error: "Cannot delete your own account" });
       return;
     }
     const target = await storage.getUser(req.params.id);
     if (!target) { res.status(404).json({ error: "User not found" }); return; }
-    if (req.session.role !== "admin" && target.role !== "manager") {
-      res.status(403).json({ error: "Managers can only delete manager users" });
+    if (req.session.role !== "admin" && target.role === "admin") {
+      res.status(403).json({ error: "Managers cannot delete admin users" });
       return;
     }
     audit("USER_DELETED", req, { deletedUser: target.username, role: target.role });
@@ -300,11 +309,11 @@ export async function registerRoutes(
 
   // --- Packages ---
 
-  app.get("/api/admin/packages", requireAuth, async (_req, res) => {
+  app.get("/api/admin/packages", requireAdmin, async (_req, res) => {
     res.json(await storage.listPackages());
   });
 
-  app.post("/api/admin/packages", requireAuth, async (req, res) => {
+  app.post("/api/admin/packages", requireAdmin, async (req, res) => {
     const { type, description, documents } = req.body;
     if (!type || !description || !Array.isArray(documents)) {
       res.status(400).json({ error: "type, description, and documents are required" });
@@ -313,7 +322,7 @@ export async function registerRoutes(
     res.status(201).json(await storage.createPackage(String(type).trim(), String(description).trim(), documents.map(String)));
   });
 
-  app.patch("/api/admin/packages/:id", requireAuth, async (req, res) => {
+  app.patch("/api/admin/packages/:id", requireAdmin, async (req, res) => {
     const { type, description, documents } = req.body;
     const updated = await storage.updatePackage(req.params.id, {
       ...(type ? { type: String(type).trim() } : {}),
@@ -324,18 +333,18 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  app.delete("/api/admin/packages/:id", requireAuth, async (req, res) => {
+  app.delete("/api/admin/packages/:id", requireAdmin, async (req, res) => {
     await storage.deletePackage(req.params.id);
     res.json({ ok: true });
   });
 
   // --- Templates ---
 
-  app.get("/api/admin/templates", requireAuth, async (_req, res) => {
+  app.get("/api/admin/templates", requireAdmin, async (_req, res) => {
     res.json(await storage.listTemplates());
   });
 
-  app.post("/api/admin/templates", requireAuth, async (req, res) => {
+  app.post("/api/admin/templates", requireAdmin, async (req, res) => {
     const { name, type } = req.body;
     if (!name || typeof name !== "string" || !type || typeof type !== "string") {
       res.status(400).json({ error: "name and type are required" });
@@ -344,7 +353,7 @@ export async function registerRoutes(
     res.status(201).json(await storage.createTemplate(name.trim(), type.trim()));
   });
 
-  app.patch("/api/admin/templates/:id", requireAuth, async (req, res) => {
+  app.patch("/api/admin/templates/:id", requireAdmin, async (req, res) => {
     const { name, type } = req.body;
     const updated = await storage.updateTemplate(req.params.id, {
       ...(name ? { name: name.trim() } : {}),
@@ -354,7 +363,7 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  app.post("/api/admin/templates/:id/file", requireAuth, async (req, res) => {
+  app.post("/api/admin/templates/:id/file", requireAdmin, async (req, res) => {
     const { fileData, originalFilename, fileSize } = req.body;
     if (!fileData || !originalFilename) {
       res.status(400).json({ error: "fileData and originalFilename are required" });
@@ -379,7 +388,7 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  app.delete("/api/admin/templates/:id", requireAuth, async (req, res) => {
+  app.delete("/api/admin/templates/:id", requireAdmin, async (req, res) => {
     await storage.deleteTemplate(req.params.id);
     res.json({ ok: true });
   });

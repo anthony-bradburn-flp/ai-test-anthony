@@ -22,7 +22,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
 }).extend({
   password: passwordSchema,
   email: z.string().email("Please enter a valid email").optional(),
-  role: z.enum(["admin", "manager"]).default("manager"),
+  role: z.enum(["admin", "manager", "user"]).default("user"),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;

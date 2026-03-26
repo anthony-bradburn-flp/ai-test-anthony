@@ -134,7 +134,7 @@ export default function AdminPage() {
   const [newUsername, setNewUsername] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [newRole, setNewRole] = useState<"admin" | "manager">("manager");
+  const [newRole, setNewRole] = useState<"admin" | "manager" | "user">("user");
 
   // Package state
   const [showAddPackage, setShowAddPackage] = useState(false);
@@ -158,7 +158,7 @@ export default function AdminPage() {
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editUsername, setEditUsername] = useState("");
   const [editEmail, setEditEmail] = useState("");
-  const [editRole, setEditRole] = useState<"admin" | "manager">("manager");
+  const [editRole, setEditRole] = useState<"admin" | "manager" | "user">("user");
   const [editPassword, setEditPassword] = useState("");
 
   // AI Settings state
@@ -248,7 +248,7 @@ export default function AdminPage() {
     setEditingUserId(u.id);
     setEditUsername(u.username);
     setEditEmail(u.email ?? "");
-    setEditRole(u.role as "admin" | "manager");
+    setEditRole(u.role as "admin" | "manager" | "user");
     setEditPassword("");
     setShowAddUser(false);
   };
@@ -955,17 +955,23 @@ export default function AdminPage() {
                       <Label>Role</Label>
                       <RadioGroup
                         value={newRole}
-                        onValueChange={(v) => setNewRole(v as "admin" | "manager")}
+                        onValueChange={(v) => setNewRole(v as "admin" | "manager" | "user")}
                         className="flex gap-4 pt-1"
                       >
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="user" id="role-user" />
+                          <Label htmlFor="role-user" className="font-normal cursor-pointer">User</Label>
+                        </div>
                         <div className="flex items-center space-x-2">
                           <RadioGroupItem value="manager" id="role-manager" />
                           <Label htmlFor="role-manager" className="font-normal cursor-pointer">Manager</Label>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <RadioGroupItem value="admin" id="role-admin" />
-                          <Label htmlFor="role-admin" className="font-normal cursor-pointer">Admin</Label>
-                        </div>
+                        {isAdmin && (
+                          <div className="flex items-center space-x-2">
+                            <RadioGroupItem value="admin" id="role-admin" />
+                            <Label htmlFor="role-admin" className="font-normal cursor-pointer">Admin</Label>
+                          </div>
+                        )}
                       </RadioGroup>
                     </div>
                   </div>
@@ -995,7 +1001,7 @@ export default function AdminPage() {
                     </TableRow>
                   ) : usersData?.map((u) => {
                     // Managers can only see edit/delete on manager users
-                    const canEdit = isAdmin || u.role === "manager";
+                    const canEdit = isAdmin || u.role !== "admin";
                     const isSelf = u.username === currentUser?.username;
                     if (editingUserId === u.id) {
                       return (
@@ -1019,9 +1025,13 @@ export default function AdminPage() {
                                   <Label>Role</Label>
                                   <RadioGroup
                                     value={editRole}
-                                    onValueChange={(v) => setEditRole(v as "admin" | "manager")}
+                                    onValueChange={(v) => setEditRole(v as "admin" | "manager" | "user")}
                                     className="flex gap-4 pt-1"
                                   >
+                                    <div className="flex items-center space-x-2">
+                                      <RadioGroupItem value="user" id="edit-role-user" />
+                                      <Label htmlFor="edit-role-user" className="font-normal cursor-pointer">User</Label>
+                                    </div>
                                     <div className="flex items-center space-x-2">
                                       <RadioGroupItem value="manager" id="edit-role-manager" />
                                       <Label htmlFor="edit-role-manager" className="font-normal cursor-pointer">Manager</Label>
