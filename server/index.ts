@@ -24,7 +24,8 @@ const app = express();
 const httpServer = createServer(app);
 
 app.use(helmet({
-  contentSecurityPolicy: false, // Disabled to allow Vite's inline scripts in dev; enable with proper config in production
+  contentSecurityPolicy: false,
+  hsts: false, // Server runs HTTP only — HSTS would force HTTPS and break access
 }));
 
 const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || "pm-governance";
