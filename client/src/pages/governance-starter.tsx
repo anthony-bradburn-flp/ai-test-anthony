@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useFieldArray } from "react-hook-form";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, useLogout } from "@/hooks/use-auth";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -102,6 +102,7 @@ function SectionCard({ id, title, badge, children }: { id: string; title: string
 export default function GovernanceStarterPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
+  const logout = useLogout();
   const [uploads, setUploads] = useState<File[]>([]);
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -251,15 +252,20 @@ export default function GovernanceStarterPage() {
               Capture project information, stakeholders, and documentation needs.
             </p>
           </div>
-          {user && (user.role === "admin" || user.role === "manager") ? (
-            <Link href="/admin">
-              <Button variant="outline" className="font-bold">Admin</Button>
-            </Link>
-          ) : (
-            <Button variant="outline" className="font-bold" onClick={() => toast.error("Only admin and manager users can access the admin section.")}>
-              Admin
+          <div className="flex gap-2">
+            {user && (user.role === "admin" || user.role === "manager") ? (
+              <Link href="/admin">
+                <Button variant="outline" className="font-bold">Admin</Button>
+              </Link>
+            ) : (
+              <Button variant="outline" className="font-bold" onClick={() => toast.error("Only admin and manager users can access the admin section.")}>
+                Admin
+              </Button>
+            )}
+            <Button variant="ghost" className="font-bold" onClick={() => logout.mutate()} disabled={logout.isPending}>
+              {logout.isPending ? "Signing out…" : "Sign Out"}
             </Button>
-          )}
+          </div>
         </div>
       </header>
 
