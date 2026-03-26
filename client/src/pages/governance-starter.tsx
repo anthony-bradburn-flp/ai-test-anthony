@@ -129,6 +129,7 @@ export default function GovernanceStarterPage() {
       docsRequired: [],
     },
     mode: "onSubmit",
+    reValidateMode: "onChange",
   });
 
   const flipsideArray = useFieldArray({
@@ -145,6 +146,12 @@ export default function GovernanceStarterPage() {
     control: form.control,
     name: "billingMilestones",
   });
+
+  const onInvalid = () => {
+    toast.error("Some required fields are incomplete.", {
+      description: "Please scroll through the form — fields highlighted in red need attention before you can generate documents.",
+    });
+  };
 
   const onSubmit = async (values: FormValues) => {
     const payload = {
@@ -242,7 +249,7 @@ export default function GovernanceStarterPage() {
 
       <main className="mx-auto max-w-[1100px] px-[18px] pb-[42px] pt-4">
         <Form {...form}>
-          <form className="grid gap-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
+          <form className="grid gap-4" onSubmit={form.handleSubmit(onSubmit, onInvalid)} noValidate>
             
             {/* Section 1 */}
             <SectionCard id="s1" title="Section 1 – Project Information" badge="All fields mandatory">
