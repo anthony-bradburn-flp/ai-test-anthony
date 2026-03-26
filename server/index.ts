@@ -31,6 +31,10 @@ const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || "pm-governance";
 const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS || "flipside-pm";
 
 app.use((req: Request, res: Response, next: NextFunction) => {
+  // API routes are protected by session auth — skip basic auth for them
+  // to prevent the browser showing a credentials dialog on fetch() calls
+  if (req.path.startsWith("/api/")) return next();
+
   const auth = req.headers.authorization;
   if (auth && auth.startsWith("Basic ")) {
     const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
