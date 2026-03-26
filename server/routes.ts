@@ -427,7 +427,20 @@ export async function registerRoutes(
       }
     }
 
-    const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents);
+    // Extract text from any supporting documents uploaded with the form
+    const supportingDocs: Array<{ name: string; content: string }> = [];
+    const truncatedDocs: string[] = [];
+    if (Array.isArray(req.body.supportingDocs)) {
+      for (const doc of req.body.supportingDocs) {
+        if (doc && typeof doc.name === "string" && typeof doc.content === "string") {
+          const { content, truncated } = await extractSupportingDocText(doc.name, doc.content);
+          if (content) supportingDocs.push({ name: doc.name, content });
+          if (truncated) truncatedDocs.push(doc.name);
+        }
+      }
+    }
+
+    const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
     const userPrompt = buildUserPrompt(projectData);
 
     try {
@@ -495,8 +508,8 @@ export async function registerRoutes(
         documents.push({ name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview });
       }
 
-      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: documents.length, provider: settings.provider });
-      res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider });
+      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: documents.length, provider: settings.provider, supportingDocsCount: supportingDocs.length });
+      res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider, truncatedDocs });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
       audit("GENERATE_FAILED", req, { error: message });
@@ -524,6 +537,36 @@ export async function registerRoutes(
   });
 
   return httpServer;
+}
+
+async function extractSupportingDocText(filename: string, base64Content: string): Promise<{ content: string; truncated: boolean }> {
+  const ext = extname(filename).toLowerCase();
+  const MAX_CHARS = 15000;
+  try {
+    const buffer = Buffer.from(base64Content, "base64");
+    let full = "";
+    if (ext === ".docx") {
+      const result = await mammoth.extractRawText({ buffer });
+      full = result.value;
+    } else if (ext === ".xlsx" || ext === ".xls") {
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const lines: string[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        lines.push(`=== ${sheetName} ===`);
+        lines.push(XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]));
+      }
+      full = lines.join("\n");
+    } else if ([".txt", ".md", ".csv"].includes(ext)) {
+      full = buffer.toString("utf8");
+    } else {
+      // PDF / PPT / PPTX — cannot extract text without additional libraries
+      return { content: `[File attached: ${filename} — content not extracted]`, truncated: false };
+    }
+    const truncated = full.length > MAX_CHARS;
+    return { content: truncated ? full.slice(0, MAX_CHARS) : full, truncated };
+  } catch {
+    return { content: `[File attached: ${filename} — extraction failed]`, truncated: false };
+  }
 }
 
 async function extractFileContent(filePath: string, originalFilename: string): Promise<string> {
@@ -556,7 +599,8 @@ function buildSystemPrompt(
   basePrompt: string,
   companyName: string,
   trainingDocContent: string | null,
-  templateContents: Array<{ name: string; content: string; format: string }> = []
+  templateContents: Array<{ name: string; content: string; format: string }> = [],
+  supportingDocs: Array<{ name: string; content: string }> = []
 ): string {
   let prompt = basePrompt.replace(/Flipside Group/g, companyName);
 
@@ -564,6 +608,14 @@ function buildSystemPrompt(
 
   if (trainingDocContent) {
     prompt += `\n\n<TRAINING_DOCUMENT>\n${trainingDocContent}\n</TRAINING_DOCUMENT>`;
+  }
+
+  if (supportingDocs.length > 0) {
+    prompt += `\n\n<SUPPORTING_DOCUMENTS>\nThe following documents were uploaded by the user to provide additional context. Use their content to enrich and inform the generated governance documents:`;
+    for (const doc of supportingDocs) {
+      prompt += `\n\n--- ${doc.name} ---\n${doc.content}`;
+    }
+    prompt += `\n</SUPPORTING_DOCUMENTS>`;
   }
 
   const formatInstructions = `
