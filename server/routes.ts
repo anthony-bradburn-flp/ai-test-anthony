@@ -459,7 +459,7 @@ export async function registerRoutes(
         const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
         const completion = await client.chat.completions.create({
           model: "gpt-5.2",
-          max_tokens: 8192,
+          max_completion_tokens: 8192,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
