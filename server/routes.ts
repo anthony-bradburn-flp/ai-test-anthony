@@ -392,7 +392,7 @@ export async function registerRoutes(
       } else {
         const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
         const completion = await client.chat.completions.create({
-          model: "gpt-4.5-preview",
+          model: "gpt-5.2",
           max_tokens: 8192,
           messages: [
             { role: "system", content: systemPrompt },
