@@ -256,7 +256,7 @@ export default function GovernanceStarterPage() {
               <Button variant="outline" className="font-bold">Admin</Button>
             </Link>
           ) : (
-            <Button variant="outline" className="font-bold" onClick={() => navigate("/login?reason=admin-access")}>
+            <Button variant="outline" className="font-bold" onClick={() => toast.error("Only admin and manager users can access the admin section.")}>
               Admin
             </Button>
           )}
