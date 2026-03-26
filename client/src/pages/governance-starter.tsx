@@ -1,11 +1,10 @@
-import { useMemo, useState, useEffect } from "react";
-import { Link, useLocation } from "wouter";
+import { useMemo, useState } from "react";
+import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useFieldArray } from "react-hook-form";
-import { useAuth } from "@/hooks/use-auth";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -100,17 +99,11 @@ function SectionCard({ id, title, badge, children }: { id: string; title: string
 }
 
 export default function GovernanceStarterPage() {
-  const { isAuthenticated, isLoading } = useAuth();
-  const [, navigate] = useLocation();
   const [uploads, setUploads] = useState<File[]>([]);
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) navigate("/login");
-  }, [isAuthenticated, isLoading, navigate]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -188,7 +181,6 @@ export default function GovernanceStarterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (res.status === 401) { navigate("/login"); return; }
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error ?? "Generation request failed");

@@ -388,7 +388,7 @@ export async function registerRoutes(
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
 
-  app.post("/api/generate", requireAuth, generateRateLimit, async (req, res) => {
+  app.post("/api/generate", generateRateLimit, async (req, res) => {
     const parsed = generateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });
@@ -495,7 +495,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/generate/download", requireAuth, async (req, res) => {
+  app.post("/api/generate/download", async (req, res) => {
     const { documents } = req.body as { documents: Array<{ name: string; filename: string; format: string; content: string }> };
     if (!Array.isArray(documents) || documents.length === 0) {
       res.status(400).json({ error: "No documents provided" });
