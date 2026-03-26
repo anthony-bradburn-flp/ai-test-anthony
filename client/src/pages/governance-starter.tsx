@@ -105,6 +105,7 @@ export default function GovernanceStarterPage() {
   const [uploads, setUploads] = useState<File[]>([]);
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
@@ -180,6 +181,7 @@ export default function GovernanceStarterPage() {
 
     setIsGenerating(true);
     setGeneratedDocs(null);
+    setGenerateError(null);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -199,7 +201,9 @@ export default function GovernanceStarterPage() {
           : "No training document — configure one in Admin > AI Settings.",
       });
     } catch (e: unknown) {
-      toast.error("Failed to generate", { description: e instanceof Error ? e.message : "Check the console for details." });
+      const msg = e instanceof Error ? e.message : "Generation failed — check server logs.";
+      setGenerateError(msg);
+      toast.error("Failed to generate", { description: msg });
     } finally {
       setIsGenerating(false);
     }
@@ -883,6 +887,12 @@ export default function GovernanceStarterPage() {
 
           </form>
         </Form>
+
+        {generateError && (
+          <div className="mt-6 rounded-[14px] border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+            <strong>Generation failed:</strong> {generateError}
+          </div>
+        )}
 
         {isGenerating && (
           <div className="mt-8 rounded-[14px] border border-border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
