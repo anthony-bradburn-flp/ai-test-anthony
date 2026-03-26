@@ -63,7 +63,7 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: false, // Set to true only when serving over HTTPS
+      secure: process.env.NODE_ENV === "production" && process.env.HTTPS === "true",
       maxAge: 8 * 60 * 60 * 1000, // 8 hours
     },
   }),
