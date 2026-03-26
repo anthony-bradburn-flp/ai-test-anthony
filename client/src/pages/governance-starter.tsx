@@ -110,10 +110,27 @@ export default function GovernanceStarterPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [generatingStage, setGeneratingStage] = useState("");
+  const [generatingStart, setGeneratingStart] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
   }, [isAuthenticated, isLoading, navigate]);
+
+  // Elapsed timer while generating
+  useEffect(() => {
+    if (!isGenerating) { setElapsed(0); return; }
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - generatingStart) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [isGenerating, generatingStart]);
+
+  // Auto-advance stage after 2 s
+  useEffect(() => {
+    if (!isGenerating) return;
+    const id = setTimeout(() => setGeneratingStage("AI is generating your documents…"), 2000);
+    return () => clearTimeout(id);
+  }, [isGenerating]);
 
   const ACCEPTED_TYPES = ".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv,.txt,.md";
   const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per file
@@ -217,6 +234,8 @@ export default function GovernanceStarterPage() {
     setIsGenerating(true);
     setGeneratedDocs(null);
     setGenerateError(null);
+    setGeneratingStage("Preparing your request…");
+    setGeneratingStart(Date.now());
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -228,6 +247,7 @@ export default function GovernanceStarterPage() {
         const err = await res.json();
         throw new Error(err.error ?? "Generation request failed");
       }
+      setGeneratingStage("Building document files…");
       const result = await res.json();
       setGeneratedDocs(result.documents ?? []);
       toast.success("Documents generated", {
@@ -972,11 +992,62 @@ export default function GovernanceStarterPage() {
           </div>
         )}
 
-        {isGenerating && (
-          <div className="mt-8 rounded-[14px] border border-border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
-            Generating documents — this may take up to a minute…
-          </div>
-        )}
+        {isGenerating && (() => {
+          const progress = elapsed < 2
+            ? (elapsed / 2) * 15
+            : Math.min(90, 15 + ((elapsed - 2) / 58) * 75);
+          const hint = elapsed > 60
+            ? "Almost there…"
+            : elapsed > 30
+            ? "Taking a little longer than usual…"
+            : "Typically takes 20–40 seconds";
+          return (
+            <div className="mt-8 rounded-[14px] border border-border bg-card p-8 space-y-5">
+              <div className="flex items-center gap-3">
+                <svg className="h-5 w-5 shrink-0 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+                <span className="font-semibold text-foreground text-sm">{generatingStage}</span>
+              </div>
+
+              {/* Progress bar */}
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-700 ease-out"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+
+              {/* Stage steps */}
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                {["Preparing", "AI generating", "Building files"].map((label, i) => {
+                  const active =
+                    (i === 0 && elapsed < 2) ||
+                    (i === 1 && elapsed >= 2 && generatingStage !== "Building document files…") ||
+                    (i === 2 && generatingStage === "Building document files…");
+                  const done =
+                    (i === 0 && elapsed >= 2) ||
+                    (i === 1 && generatingStage === "Building document files…");
+                  return (
+                    <div key={i} className="flex items-center gap-1.5">
+                      {i > 0 && <div className="h-px w-6 bg-border" />}
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full border text-[11px] font-medium",
+                        done ? "border-primary/40 bg-primary/10 text-primary" :
+                        active ? "border-primary bg-primary text-primary-foreground" :
+                        "border-border bg-muted text-muted-foreground"
+                      )}>
+                        {done ? "✓ " : ""}{label}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className="ml-auto tabular-nums">{elapsed}s elapsed · {hint}</div>
+              </div>
+            </div>
+          );
+        })()}
 
         {generatedDocs && generatedDocs.length > 0 && (
           <div className="mt-8 space-y-4">
