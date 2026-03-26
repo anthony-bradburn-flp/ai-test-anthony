@@ -399,7 +399,12 @@ export async function registerRoutes(
 
   app.post("/api/generate", requireAuth, generateRateLimit, (req, res, next) => {
     res.setTimeout(180_000, () => {
-      res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
+      if (!res.headersSent) {
+        res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
+      } else {
+        res.write(JSON.stringify({ type: "error", error: "Generation timed out after 3 minutes." }) + "\n");
+        res.end();
+      }
     });
     next();
   }, async (req, res) => {
@@ -419,49 +424,48 @@ export async function registerRoutes(
       return;
     }
 
-    // Load template contents and extract supporting doc text in parallel
-    const allTemplates = await storage.listTemplates();
+    // Start streaming — send headers before the slow AI call so the
+    // connection stays alive and the client can read events as they arrive
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.flushHeaders();
 
-    const [templateContents, { supportingDocs, truncatedDocs }] = await Promise.all([
-      // Template files — read all required docs concurrently
-      Promise.all(
-        projectData.docsRequired.map(async (docName) => {
-          const tpl = allTemplates.find((t) => t.name === docName);
-          if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
-          const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
-          const ext = extname(tpl.originalFilename ?? "").toLowerCase();
-          const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
-          return content ? { name: docName, content, format } : null;
-        })
-      ).then((results) => results.filter(Boolean) as Array<{ name: string; content: string; format: string }>),
-
-      // Supporting docs — extract text from all uploads concurrently
-      (async () => {
-        const docs: Array<{ name: string; content: string }> = [];
-        const truncated: string[] = [];
-        const rawDocs = Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [];
-        const valid = rawDocs.filter((d: unknown) =>
-          d && typeof (d as Record<string, unknown>).name === "string" &&
-          typeof (d as Record<string, unknown>).content === "string"
-        ) as Array<{ name: string; content: string }>;
-
-        const results = await Promise.all(
-          valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r })))
-        );
-        for (const { doc, content, truncated: wasTruncated } of results) {
-          if (content) docs.push({ name: doc.name, content });
-          if (wasTruncated) truncated.push(doc.name);
-        }
-        return { supportingDocs: docs, truncatedDocs: truncated };
-      })(),
-    ]);
-
-    const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
-    const userPrompt = buildUserPrompt(projectData);
+    const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
 
     try {
-      let aiContent: string;
+      const allTemplates = await storage.listTemplates();
 
+      const [templateContents, { supportingDocs, truncatedDocs }] = await Promise.all([
+        Promise.all(
+          projectData.docsRequired.map(async (docName) => {
+            const tpl = allTemplates.find((t) => t.name === docName);
+            if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
+            const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
+            const ext = extname(tpl.originalFilename ?? "").toLowerCase();
+            const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+            return content ? { name: docName, content, format } : null;
+          })
+        ).then((r) => r.filter(Boolean) as Array<{ name: string; content: string; format: string }>),
+
+        (async () => {
+          const docs: Array<{ name: string; content: string }> = [];
+          const truncated: string[] = [];
+          const valid = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
+            .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
+          const results = await Promise.all(valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r }))));
+          for (const { doc, content, truncated: wasTruncated } of results) {
+            if (content) docs.push({ name: doc.name, content });
+            if (wasTruncated) truncated.push(doc.name);
+          }
+          return { supportingDocs: docs, truncatedDocs: truncated };
+        })(),
+      ]);
+
+      const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
+      const userPrompt = buildUserPrompt(projectData);
+
+      let aiContent: string;
       if (settings.provider === "anthropic") {
         const client = new Anthropic({ apiKey: getAnthropicKey() });
         const message = await client.messages.create({
@@ -484,14 +488,13 @@ export async function registerRoutes(
         aiContent = completion.choices[0]?.message?.content ?? "";
       }
 
-      // Parse structured JSON response from AI
       const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
       type AiDoc = { name: string; filename: string; format?: string; content?: string; sheets?: Array<{ name: string; headers: string[]; rows: string[][] }> };
       let aiDocs: AiDoc[] = [];
       if (jsonMatch) {
         try {
-          const parsed = JSON.parse(jsonMatch[1]);
-          aiDocs = parsed.documents ?? [];
+          const p = JSON.parse(jsonMatch[1]);
+          aiDocs = p.documents ?? [];
         } catch {
           aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
         }
@@ -499,8 +502,11 @@ export async function registerRoutes(
         aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
       }
 
-      // Build all .docx / .xlsx file buffers concurrently
-      const documents = await Promise.all(aiDocs.map(async (doc) => {
+      // Tell the client how many documents are coming
+      send({ type: "start", count: aiDocs.length, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
+
+      // Build and stream each document as soon as it's ready
+      await Promise.all(aiDocs.map(async (doc) => {
         const fmt = doc.format ?? "txt";
         let filename = doc.filename ?? `${doc.name}.txt`;
         let fileBuffer: Buffer;
@@ -520,15 +526,17 @@ export async function registerRoutes(
           preview = doc.content ?? "";
         }
 
-        return { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview };
+        send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
       }));
 
-      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: documents.length, provider: settings.provider, supportingDocsCount: supportingDocs.length });
-      res.json({ documents, trainingDocAttached: !!settings.trainingDocContent, provider: settings.provider, truncatedDocs });
+      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: aiDocs.length, provider: settings.provider, supportingDocsCount: supportingDocs.length });
+      send({ type: "done", provider: settings.provider });
+      res.end();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
       audit("GENERATE_FAILED", req, { error: message });
-      res.status(502).json({ error: message });
+      send({ type: "error", error: message });
+      res.end();
     }
   });
 
