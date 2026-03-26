@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { Trash2 } from "lucide-react";
@@ -103,7 +103,9 @@ export default function GovernanceStarterPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
   const logout = useLogout();
-  const [uploads, setUploads] = useState<File[]>([]);
+  const [uploads, setUploads] = useState<Array<{ name: string; content: string; size: number }>>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -112,6 +114,37 @@ export default function GovernanceStarterPage() {
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
   }, [isAuthenticated, isLoading, navigate]);
+
+  const ACCEPTED_TYPES = ".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv,.txt,.md";
+  const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per file
+
+  const readFileAsBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const addFiles = async (files: File[]) => {
+    for (const file of files) {
+      if (file.size > MAX_FILE_BYTES) {
+        toast.error(`${file.name} exceeds 10 MB limit and was skipped.`);
+        continue;
+      }
+      const content = await readFileAsBase64(file);
+      setUploads((prev) => {
+        if (prev.some((u) => u.name === file.name)) return prev; // dedupe
+        return [...prev, { name: file.name, content, size: file.size }];
+      });
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    addFiles(Array.from(e.dataTransfer.files));
+  };
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -178,6 +211,7 @@ export default function GovernanceStarterPage() {
       clientStakeholders: values.clientStakeholders,
       sponsorIndex: values.sponsorIndex,
       docsRequired: values.docsRequired,
+      supportingDocs: uploads.map((u) => ({ name: u.name, content: u.content })),
     };
 
     setIsGenerating(true);
@@ -786,36 +820,64 @@ export default function GovernanceStarterPage() {
               <div className="grid grid-cols-12 gap-3">
                 <div className="col-span-12">
                   <Label className="flex justify-between font-semibold mb-1.5 text-sm text-muted-foreground">
-                    <span>Document Upload <span className="text-xs font-normal opacity-70">(optional)</span></span>
+                    <span>Supporting Documents <span className="text-xs font-normal opacity-70">(optional — used to enrich generated documents)</span></span>
                   </Label>
-                  <Input
-                    id="docsUpload"
+
+                  {/* Hidden file input */}
+                  <input
+                    ref={fileInputRef}
                     type="file"
                     multiple
-                    accept=".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv,.txt"
+                    accept={ACCEPTED_TYPES}
+                    className="hidden"
                     onChange={(e) => {
-                      const newFiles = Array.from(e.target.files || []);
-                      setUploads((prev) => [...prev, ...newFiles]);
-                      e.target.value = ""; // Reset input
+                      addFiles(Array.from(e.target.files || []));
+                      e.target.value = "";
                     }}
-                    className="cursor-pointer file:text-foreground file:font-semibold"
                   />
-                  <div className="mt-1.5 text-xs text-muted-foreground">
-                    You can select and upload multiple documents (e.g. PPT, PDF, DOC, XLS).
+
+                  {/* Drag-and-drop zone */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => fileInputRef.current?.click()}
+                    onKeyDown={(e) => e.key === "Enter" && fileInputRef.current?.click()}
+                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={handleDrop}
+                    className={cn(
+                      "flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors cursor-pointer select-none",
+                      isDragging
+                        ? "border-primary bg-primary/5 text-primary"
+                        : "border-border bg-muted/20 text-muted-foreground hover:bg-muted/40"
+                    )}
+                  >
+                    <svg className="h-8 w-8 opacity-60" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                    </svg>
+                    <div>
+                      <span className="font-semibold text-sm">Drop files here or click to browse</span>
+                      <p className="text-xs mt-0.5">PDF, DOCX, XLSX, PPT, CSV, TXT — up to 10 MB each</p>
+                    </div>
                   </div>
-                  
+
+                  {/* File list */}
                   {uploads.length > 0 && (
-                    <ul className="mt-2.5 pl-4 text-xs text-muted-foreground list-disc">
+                    <ul className="mt-2.5 space-y-1.5">
                       {uploads.map((f, i) => (
-                        <li key={i} className="mb-1 flex items-center gap-2">
-                          <span>{f.name} ({Math.round(f.size / 1024)} KB)</span>
-                          <button 
-                            type="button" 
-                            onClick={() => setUploads(prev => prev.filter((_, idx) => idx !== i))}
-                            className="text-destructive hover:underline"
-                          >
-                            Remove
-                          </button>
+                        <li key={i} className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-1.5 text-xs">
+                          <span className="truncate max-w-[70%] font-medium">{f.name}</span>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-muted-foreground">{Math.round(f.size / 1024)} KB</span>
+                            <button
+                              type="button"
+                              onClick={() => setUploads((prev) => prev.filter((_, idx) => idx !== i))}
+                              className="text-destructive hover:text-destructive/80"
+                              aria-label={`Remove ${f.name}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </li>
                       ))}
                     </ul>
