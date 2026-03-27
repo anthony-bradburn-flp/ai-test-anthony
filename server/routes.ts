@@ -435,10 +435,22 @@ export async function registerRoutes(
     const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
 
     try {
-      // Load templates and packages in parallel
-      const [allTemplates, allPackages] = await Promise.all([
+      // Load templates, packages, and extract supporting docs all in parallel
+      const [allTemplates, allPackages, { supportingDocs, truncatedDocs }] = await Promise.all([
         storage.listTemplates(),
         storage.listPackages(),
+        (async () => {
+          const docs: Array<{ name: string; content: string }> = [];
+          const truncated: string[] = [];
+          const valid = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
+            .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
+          const results = await Promise.all(valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r }))));
+          for (const { doc, content, truncated: wasTruncated } of results) {
+            if (content) docs.push({ name: doc.name, content });
+            if (wasTruncated) truncated.push(doc.name);
+          }
+          return { supportingDocs: docs, truncatedDocs: truncated };
+        })(),
       ]);
 
       // Auto-include documents from the matching package for this project type
@@ -456,19 +468,17 @@ export async function registerRoutes(
       const passthroughDocNames = allDocNames.filter(isPassthrough);
       const aiDocNames = allDocNames.filter((n) => !isPassthrough(n));
 
-      // Extract supporting docs text in parallel
-      const { supportingDocs, truncatedDocs } = await (async () => {
-        const docs: Array<{ name: string; content: string }> = [];
-        const truncated: string[] = [];
-        const valid = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
-          .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
-        const results = await Promise.all(valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r }))));
-        for (const { doc, content, truncated: wasTruncated } of results) {
-          if (content) docs.push({ name: doc.name, content });
-          if (wasTruncated) truncated.push(doc.name);
-        }
-        return { supportingDocs: docs, truncatedDocs: truncated };
-      })();
+      // Load template contents for AI docs in parallel with everything above
+      const templateContents = (await Promise.all(
+        aiDocNames.map(async (docName) => {
+          const tpl = allTemplates.find((t) => t.name === docName);
+          if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
+          const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
+          const ext = extname(tpl.originalFilename ?? "").toLowerCase();
+          const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+          return content ? { name: docName, content, format } : null;
+        })
+      )).filter(Boolean) as Array<{ name: string; content: string; format: string }>;
 
       // Tell the client the total number of documents (passthrough + AI)
       send({ type: "start", count: allDocNames.length, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
@@ -486,21 +496,12 @@ export async function registerRoutes(
 
       // AI-generate the remaining docs
       if (aiDocNames.length > 0) {
-        // Load template contents for AI docs (to give AI the structure to follow)
-        const templateContents = (await Promise.all(
-          aiDocNames.map(async (docName) => {
-            const tpl = allTemplates.find((t) => t.name === docName);
-            if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
-            const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
-            const ext = extname(tpl.originalFilename ?? "").toLowerCase();
-            const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
-            return content ? { name: docName, content, format } : null;
-          })
-        )).filter(Boolean) as Array<{ name: string; content: string; format: string }>;
-
         const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
-        // Pass only the AI doc names to the user prompt so the AI knows exactly what to generate
         const userPrompt = buildUserPrompt({ ...projectData, docsRequired: aiDocNames });
+
+        // Log approximate prompt size to help diagnose slow generation
+        const promptChars = systemPrompt.length + userPrompt.length;
+        console.log(`[generate] prompt ~${Math.round(promptChars / 4)} tokens (${Math.round(promptChars / 1024)} KB) | training=${!!settings.trainingDocContent} | templates=${templateContents.length} | supportingDocs=${supportingDocs.length}`);
 
         let aiContent: string;
         if (settings.provider === "anthropic") {
