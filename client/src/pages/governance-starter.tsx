@@ -227,14 +227,19 @@ export default function GovernanceStarterPage() {
   });
 
   // Auto-populate docsRequired from the package when project type changes
+  // Only ticks AI-generate docs — passthrough docs are included automatically at generate time
   const watchedProjectType = form.watch("projectType");
   useEffect(() => {
-    if (!watchedProjectType || !availablePackages) return;
+    if (!watchedProjectType || !availablePackages || !availableTemplates) return;
     const pkg = availablePackages.find((p) => p.type === watchedProjectType);
     if (pkg?.documents.length) {
-      form.setValue("docsRequired", pkg.documents, { shouldValidate: false, shouldDirty: false });
+      const aiDocNames = pkg.documents.filter((name) => {
+        const tpl = availableTemplates.find((t) => t.name === name);
+        return !tpl || tpl.generateMode !== "passthrough";
+      });
+      form.setValue("docsRequired", aiDocNames, { shouldValidate: false, shouldDirty: false });
     }
-  }, [watchedProjectType, availablePackages]);
+  }, [watchedProjectType, availablePackages, availableTemplates]);
 
   const onInvalid = () => {
     toast.error("Some required fields are incomplete.", {
@@ -1000,11 +1005,11 @@ export default function GovernanceStarterPage() {
                       </FormLabel>
                       {watchedProjectType && (
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          Pre-populated from the <strong>{watchedProjectType}</strong> package. Adjust as needed.
+                          Select which documents the AI should generate. Documents marked as pass-through are automatically added to the zip.
                         </p>
                       )}
                       <div className="mt-1.5 grid gap-2.5 md:grid-cols-2">
-                        {(availableTemplates ?? []).map((tpl) => (
+                        {(availableTemplates ?? []).filter((t) => t.generateMode !== "passthrough").map((tpl) => (
                           <FormField
                             key={tpl.id}
                             control={form.control}
@@ -1023,19 +1028,29 @@ export default function GovernanceStarterPage() {
                                     }}
                                   />
                                 </FormControl>
-                                <FormLabel className="text-sm font-normal cursor-pointer w-full h-full pt-0.5 flex items-center justify-between gap-2">
+                                <FormLabel className="text-sm font-normal cursor-pointer w-full h-full pt-0.5">
                                   <span>{tpl.name}</span>
-                                  {tpl.generateMode === "passthrough" && (
-                                    <span className="text-[10px] font-medium text-amber-600 border border-amber-300 rounded px-1.5 py-0.5 shrink-0">Template only</span>
-                                  )}
                                 </FormLabel>
                               </FormItem>
                             )}
                           />
                         ))}
                       </div>
+                      {(() => {
+                        const pkg = (availablePackages ?? []).find((p) => p.type === watchedProjectType);
+                        const passthroughDocs = (pkg?.documents ?? []).filter((name) => {
+                          const tpl = (availableTemplates ?? []).find((t) => t.name === name);
+                          return tpl?.generateMode === "passthrough";
+                        });
+                        return passthroughDocs.length > 0 ? (
+                          <div className="mt-2.5 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 px-3 py-2.5 text-xs text-blue-700 dark:text-blue-300">
+                            <span className="font-semibold">Also included in zip (pass-through):</span>{" "}
+                            {passthroughDocs.join(", ")}
+                          </div>
+                        ) : null;
+                      })()}
                       <FormDescription className="text-xs mt-1.5">
-                        Select documents to include. <span className="text-amber-600 font-medium">Template only</span> items are included as-is without AI editing.
+                        Select the documents for the AI to generate. Pass-through templates from the package are added to the zip automatically.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
