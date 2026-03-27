@@ -110,6 +110,7 @@ export default function GovernanceStarterPage() {
   const [generatedDocs, setGeneratedDocs] = useState<GeneratedDocument[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const generateAbortRef = useRef<AbortController | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [generatingStage, setGeneratingStage] = useState("");
   const [generatingStart, setGeneratingStart] = useState(0);
@@ -266,6 +267,8 @@ export default function GovernanceStarterPage() {
       supportingDocs: uploads.map((u) => ({ name: u.name, content: u.content })),
     };
 
+    const abortController = new AbortController();
+    generateAbortRef.current = abortController;
     setIsGenerating(true);
     setGeneratedDocs(null);
     setGenerateError(null);
@@ -276,6 +279,7 @@ export default function GovernanceStarterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: abortController.signal,
       });
       if (res.status === 401) { navigate("/login"); return; }
       if (!res.ok) {
@@ -326,10 +330,15 @@ export default function GovernanceStarterPage() {
         }
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Generation failed — check server logs.";
-      setGenerateError(msg);
-      toast.error("Failed to generate", { description: msg });
+      if (e instanceof Error && e.name === "AbortError") {
+        toast.info("Generation cancelled");
+      } else {
+        const msg = e instanceof Error ? e.message : "Generation failed — check server logs.";
+        setGenerateError(msg);
+        toast.error("Failed to generate", { description: msg });
+      }
     } finally {
+      generateAbortRef.current = null;
       setIsGenerating(false);
     }
   };
@@ -1068,9 +1077,14 @@ export default function GovernanceStarterPage() {
                 Required fields validated on submit.
               </div>
               <div className="flex flex-wrap gap-2.5 justify-end">
-                <Button type="button" variant="outline" onClick={handleReset} className="font-bold">
+                <Button type="button" variant="outline" onClick={handleReset} className="font-bold" disabled={isGenerating}>
                   Reset
                 </Button>
+                {isGenerating && (
+                  <Button type="button" variant="destructive" onClick={() => generateAbortRef.current?.abort()} className="font-bold">
+                    Cancel
+                  </Button>
+                )}
                 <Button type="submit" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isGenerating}>
                   {isGenerating ? "Generating…" : "Generate documents"}
                 </Button>

@@ -121,12 +121,12 @@ export interface IStorage {
 }
 
 const DEFAULT_PACKAGES: Package[] = [
-  { id: "p1", type: "Web", description: "Standard pack for web build projects", documents: ["RACI Matrix Template", "RAID Log Master", "Communications Plan", "Project Kickoff Deck"] },
-  { id: "p2", type: "App", description: "Mobile app development docs", documents: ["RACI Matrix Template", "Risk Register Standard", "Communications Plan", "Project Kickoff Deck"] },
-  { id: "p3", type: "Strategy", description: "Lightweight pack for consulting", documents: ["RACI Matrix Template", "Communications Plan"] },
-  { id: "p4", type: "Design", description: "Design-only project governance", documents: ["RACI Matrix Template", "RAID Log Master", "Project Kickoff Deck"] },
-  { id: "p5", type: "Content", description: "Content and copywriting", documents: ["Communications Plan", "RAID Log Master"] },
-  { id: "p6", type: "XR/AR", description: "Experimental & XR projects", documents: ["RACI Matrix Template", "RAID Log Master", "Risk Register Standard", "Communications Plan", "Project Kickoff Deck"] },
+  { id: "p1", type: "Web", description: "Standard pack for web build projects", documents: ["RACI", "RAID Log", "Communications Plan", "Risk Register", "Go Live Checklist - Website", "Kick Off Checklist - Website"] },
+  { id: "p2", type: "App", description: "Mobile app development docs", documents: ["RACI", "RAID Log", "Risk Register", "Communications Plan", "Kick Off Checklist - App", "Go Live Checklist - App"] },
+  { id: "p3", type: "Strategy", description: "Lightweight pack for consulting", documents: ["RACI", "Communications Plan"] },
+  { id: "p4", type: "Design", description: "Design-only project governance", documents: ["RACI", "RAID Log"] },
+  { id: "p5", type: "Content", description: "Content and copywriting", documents: ["Communications Plan", "RAID Log"] },
+  { id: "p6", type: "XR/AR", description: "Experimental & XR projects", documents: ["RACI", "RAID Log", "Risk Register", "Communications Plan"] },
 ];
 
 const DEFAULT_TEMPLATES: Template[] = [
@@ -155,6 +155,8 @@ export class MemStorage implements IStorage {
     this.packages = persisted.packages.length
       ? new Map(persisted.packages.map((p) => [p.id, p]))
       : new Map(DEFAULT_PACKAGES.map((p) => [p.id, p]));
+    // Migrate: replace legacy document names with current template names
+    this.migratePackageNames();
     // Ensure admin user always exists (re-seed if missing or password changed)
     const adminPassword = process.env.ADMIN_PASSWORD || "governance-admin";
     if (!process.env.ADMIN_PASSWORD) {
@@ -175,6 +177,34 @@ export class MemStorage implements IStorage {
       Array.from(this.packages.values()),
       this.aiSettings,
     );
+  }
+
+  /** One-time migration: replace legacy document names in packages with current template names. */
+  private migratePackageNames() {
+    const RENAMES: Record<string, string> = {
+      "RACI Matrix Template": "RACI",
+      "RAID Log Master": "RAID Log",
+      "Risk Register Standard": "Risk Register",
+      "Project Kickoff Deck": "Kick Off Checklist - Website",
+    };
+    let changed = false;
+    for (const [id, pkg] of this.packages) {
+      // Rename legacy names and deduplicate
+      const seen = new Set<string>();
+      const updated: string[] = [];
+      for (const doc of pkg.documents) {
+        const canonical = RENAMES[doc] ?? doc;
+        if (!seen.has(canonical)) {
+          seen.add(canonical);
+          updated.push(canonical);
+        }
+      }
+      if (updated.length !== pkg.documents.length || updated.some((d, i) => d !== pkg.documents[i])) {
+        this.packages.set(id, { ...pkg, documents: updated });
+        changed = true;
+      }
+    }
+    if (changed) this.persist();
   }
 
   async getUser(id: string): Promise<User | undefined> {
