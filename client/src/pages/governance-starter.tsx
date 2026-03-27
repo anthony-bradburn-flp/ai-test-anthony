@@ -121,18 +121,18 @@ export default function GovernanceStarterPage() {
 
   // Load templates and packages to drive the docsRequired checkbox list
   const { data: availableTemplates } = useQuery<Array<{ id: string; name: string; generateMode?: string }>>({
-    queryKey: ["/api/admin/templates"],
+    queryKey: ["/api/templates"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/templates");
+      const res = await fetch("/api/templates");
       return res.ok ? res.json() : [];
     },
     enabled: isAuthenticated,
   });
 
   const { data: availablePackages } = useQuery<Array<{ id: string; type: string; documents: string[] }>>({
-    queryKey: ["/api/admin/packages"],
+    queryKey: ["/api/packages"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/packages");
+      const res = await fetch("/api/packages");
       return res.ok ? res.json() : [];
     },
     enabled: isAuthenticated,
