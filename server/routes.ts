@@ -468,12 +468,15 @@ export async function registerRoutes(
       const passthroughDocNames = allDocNames.filter(isPassthrough);
       const aiDocNames = allDocNames.filter((n) => !isPassthrough(n));
 
-      // Load template contents for AI docs in parallel with everything above
+      // Load template contents for AI docs — cap each at 4,000 chars so the
+      // AI gets enough structure to follow without bloating the prompt
+      const MAX_TEMPLATE_CHARS = 4000;
       const templateContents = (await Promise.all(
         aiDocNames.map(async (docName) => {
           const tpl = allTemplates.find((t) => t.name === docName);
           if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
-          const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
+          let content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
+          if (content.length > MAX_TEMPLATE_CHARS) content = content.slice(0, MAX_TEMPLATE_CHARS) + "\n[...template truncated for brevity — follow this structure]";
           const ext = extname(tpl.originalFilename ?? "").toLowerCase();
           const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
           return content ? { name: docName, content, format } : null;
