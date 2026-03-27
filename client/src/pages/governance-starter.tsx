@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { Trash2 } from "lucide-react";
@@ -118,6 +119,25 @@ export default function GovernanceStarterPage() {
     if (!isLoading && !isAuthenticated) navigate("/login");
   }, [isAuthenticated, isLoading, navigate]);
 
+  // Load templates and packages to drive the docsRequired checkbox list
+  const { data: availableTemplates } = useQuery<Array<{ id: string; name: string; generateMode?: string }>>({
+    queryKey: ["/api/admin/templates"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/templates");
+      return res.ok ? res.json() : [];
+    },
+    enabled: isAuthenticated,
+  });
+
+  const { data: availablePackages } = useQuery<Array<{ id: string; type: string; documents: string[] }>>({
+    queryKey: ["/api/admin/packages"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/packages");
+      return res.ok ? res.json() : [];
+    },
+    enabled: isAuthenticated,
+  });
+
   // Elapsed timer while generating
   useEffect(() => {
     if (!isGenerating) { setElapsed(0); return; }
@@ -205,6 +225,16 @@ export default function GovernanceStarterPage() {
     control: form.control,
     name: "billingMilestones",
   });
+
+  // Auto-populate docsRequired from the package when project type changes
+  const watchedProjectType = form.watch("projectType");
+  useEffect(() => {
+    if (!watchedProjectType || !availablePackages) return;
+    const pkg = availablePackages.find((p) => p.type === watchedProjectType);
+    if (pkg?.documents.length) {
+      form.setValue("docsRequired", pkg.documents, { shouldValidate: false, shouldDirty: false });
+    }
+  }, [watchedProjectType, availablePackages]);
 
   const onInvalid = () => {
     toast.error("Some required fields are incomplete.", {
@@ -968,45 +998,44 @@ export default function GovernanceStarterPage() {
                       <FormLabel className="flex justify-between font-semibold">
                         <span>Documents Required <span className="text-destructive font-extrabold ml-1">*</span></span>
                       </FormLabel>
-                      
+                      {watchedProjectType && (
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Pre-populated from the <strong>{watchedProjectType}</strong> package. Adjust as needed.
+                        </p>
+                      )}
                       <div className="mt-1.5 grid gap-2.5 md:grid-cols-2">
-                        {["RACI", "RAID Log", "Risk Register", "Communications Plan"].map((item) => (
+                        {(availableTemplates ?? []).map((tpl) => (
                           <FormField
-                            key={item}
+                            key={tpl.id}
                             control={form.control}
                             name="docsRequired"
-                            render={({ field }) => {
-                              return (
-                                <FormItem
-                                  key={item}
-                                  className="flex flex-row items-center space-x-2.5 space-y-0 rounded-xl border border-border bg-background p-2.5 px-3"
-                                >
-                                  <FormControl>
-                                    <Checkbox
-                                      checked={field.value?.includes(item)}
-                                      onCheckedChange={(checked) => {
-                                        return checked
-                                          ? field.onChange([...field.value, item])
-                                          : field.onChange(
-                                              field.value?.filter(
-                                                (value) => value !== item
-                                              )
-                                            )
-                                      }}
-                                    />
-                                  </FormControl>
-                                  <FormLabel className="text-sm font-normal cursor-pointer w-full h-full pt-0.5">
-                                    {item}
-                                  </FormLabel>
-                                </FormItem>
-                              )
-                            }}
+                            render={({ field }) => (
+                              <FormItem
+                                className="flex flex-row items-center space-x-2.5 space-y-0 rounded-xl border border-border bg-background p-2.5 px-3"
+                              >
+                                <FormControl>
+                                  <Checkbox
+                                    checked={field.value?.includes(tpl.name)}
+                                    onCheckedChange={(checked) => {
+                                      return checked
+                                        ? field.onChange([...field.value, tpl.name])
+                                        : field.onChange(field.value?.filter((v) => v !== tpl.name));
+                                    }}
+                                  />
+                                </FormControl>
+                                <FormLabel className="text-sm font-normal cursor-pointer w-full h-full pt-0.5 flex items-center justify-between gap-2">
+                                  <span>{tpl.name}</span>
+                                  {tpl.generateMode === "passthrough" && (
+                                    <span className="text-[10px] font-medium text-amber-600 border border-amber-300 rounded px-1.5 py-0.5 shrink-0">Template only</span>
+                                  )}
+                                </FormLabel>
+                              </FormItem>
+                            )}
                           />
                         ))}
                       </div>
-                      
                       <FormDescription className="text-xs mt-1.5">
-                        Select one or more documents to generate.
+                        Select documents to include. <span className="text-amber-600 font-medium">Template only</span> items are included as-is without AI editing.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

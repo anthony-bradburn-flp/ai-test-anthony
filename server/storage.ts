@@ -46,6 +46,7 @@ export type Template = {
   filePath?: string;
   originalFilename?: string;
   fileSize?: number;
+  generateMode?: "ai" | "passthrough";
 };
 
 export type Package = {
@@ -105,7 +106,7 @@ export interface IStorage {
   updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined>;
   listTemplates(): Promise<Template[]>;
   createTemplate(name: string, type: string): Promise<Template>;
-  updateTemplate(id: string, fields: { name?: string; type?: string }): Promise<Template | undefined>;
+  updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough" }): Promise<Template | undefined>;
   updateTemplateFile(id: string, filePath: string, originalFilename: string, fileSize: number): Promise<Template | undefined>;
   getTemplate(id: string): Promise<Template | undefined>;
   deleteTemplate(id: string): Promise<void>;
@@ -127,11 +128,11 @@ const DEFAULT_PACKAGES: Package[] = [
 ];
 
 const DEFAULT_TEMPLATES: Template[] = [
-  { id: "t1", name: "RACI Matrix Template", type: "Excel (.xlsx)", lastUpdated: "2024-02-15" },
-  { id: "t2", name: "RAID Log Master", type: "Excel (.xlsx)", lastUpdated: "2024-01-10" },
-  { id: "t3", name: "Communications Plan", type: "Word (.docx)", lastUpdated: "2024-03-01" },
-  { id: "t4", name: "Risk Register Standard", type: "Excel (.xlsx)", lastUpdated: "2023-11-20" },
-  { id: "t5", name: "Project Kickoff Deck", type: "PowerPoint (.pptx)", lastUpdated: "2024-03-05" },
+  { id: "t1", name: "RACI Matrix Template", type: "Excel (.xlsx)", lastUpdated: "2024-02-15", generateMode: "ai" },
+  { id: "t2", name: "RAID Log Master", type: "Excel (.xlsx)", lastUpdated: "2024-01-10", generateMode: "ai" },
+  { id: "t3", name: "Communications Plan", type: "Word (.docx)", lastUpdated: "2024-03-01", generateMode: "ai" },
+  { id: "t4", name: "Risk Register Standard", type: "Excel (.xlsx)", lastUpdated: "2023-11-20", generateMode: "ai" },
+  { id: "t5", name: "Project Kickoff Deck", type: "PowerPoint (.pptx)", lastUpdated: "2024-03-05", generateMode: "passthrough" },
 ];
 
 export class MemStorage implements IStorage {
@@ -232,7 +233,7 @@ export class MemStorage implements IStorage {
     return t;
   }
 
-  async updateTemplate(id: string, fields: { name?: string; type?: string }): Promise<Template | undefined> {
+  async updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough" }): Promise<Template | undefined> {
     const t = this.templates.get(id);
     if (!t) return undefined;
     const updated = { ...t, ...fields, lastUpdated: new Date().toISOString().slice(0, 10) };

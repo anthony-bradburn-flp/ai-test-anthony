@@ -354,10 +354,11 @@ export async function registerRoutes(
   });
 
   app.patch("/api/admin/templates/:id", requireAdmin, async (req, res) => {
-    const { name, type } = req.body;
+    const { name, type, generateMode } = req.body;
     const updated = await storage.updateTemplate(req.params.id, {
       ...(name ? { name: name.trim() } : {}),
       ...(type ? { type: type.trim() } : {}),
+      ...(generateMode !== undefined ? { generateMode } : {}),
     });
     if (!updated) { res.status(404).json({ error: "Template not found" }); return; }
     res.json(updated);
@@ -434,11 +435,60 @@ export async function registerRoutes(
     const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
 
     try {
-      const allTemplates = await storage.listTemplates();
+      // Load templates and packages in parallel
+      const [allTemplates, allPackages] = await Promise.all([
+        storage.listTemplates(),
+        storage.listPackages(),
+      ]);
 
-      const [templateContents, { supportingDocs, truncatedDocs }] = await Promise.all([
-        Promise.all(
-          projectData.docsRequired.map(async (docName) => {
+      // Auto-include documents from the matching package for this project type
+      const pkg = allPackages.find((p) => p.type === projectData.projectType);
+      const packageDocNames: string[] = pkg?.documents ?? [];
+
+      // Merge: package docs first (auto-included), then any additionally selected docs
+      const allDocNames = Array.from(new Set([...packageDocNames, ...projectData.docsRequired]));
+
+      // Split docs into passthrough (template file served as-is) vs AI-generated
+      const isPassthrough = (docName: string) => {
+        const tpl = allTemplates.find((t) => t.name === docName);
+        return !!(tpl?.filePath && existsSync(tpl.filePath) && tpl.generateMode === "passthrough");
+      };
+      const passthroughDocNames = allDocNames.filter(isPassthrough);
+      const aiDocNames = allDocNames.filter((n) => !isPassthrough(n));
+
+      // Extract supporting docs text in parallel
+      const { supportingDocs, truncatedDocs } = await (async () => {
+        const docs: Array<{ name: string; content: string }> = [];
+        const truncated: string[] = [];
+        const valid = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
+          .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
+        const results = await Promise.all(valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r }))));
+        for (const { doc, content, truncated: wasTruncated } of results) {
+          if (content) docs.push({ name: doc.name, content });
+          if (wasTruncated) truncated.push(doc.name);
+        }
+        return { supportingDocs: docs, truncatedDocs: truncated };
+      })();
+
+      // Tell the client the total number of documents (passthrough + AI)
+      send({ type: "start", count: allDocNames.length, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
+
+      // Stream passthrough docs immediately — no AI needed, just serve the template file
+      for (const docName of passthroughDocNames) {
+        const tpl = allTemplates.find((t) => t.name === docName)!;
+        const fileBuffer = readFileSync(tpl.filePath!);
+        const ext = extname(tpl.originalFilename ?? "").toLowerCase();
+        const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+        const safeName = docName.replace(/[^a-zA-Z0-9 -]/g, "").replace(/\s+/g, "_");
+        const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
+        send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
+      }
+
+      // AI-generate the remaining docs
+      if (aiDocNames.length > 0) {
+        // Load template contents for AI docs (to give AI the structure to follow)
+        const templateContents = (await Promise.all(
+          aiDocNames.map(async (docName) => {
             const tpl = allTemplates.find((t) => t.name === docName);
             if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
             const content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
@@ -446,90 +496,74 @@ export async function registerRoutes(
             const format = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
             return content ? { name: docName, content, format } : null;
           })
-        ).then((r) => r.filter(Boolean) as Array<{ name: string; content: string; format: string }>),
+        )).filter(Boolean) as Array<{ name: string; content: string; format: string }>;
 
-        (async () => {
-          const docs: Array<{ name: string; content: string }> = [];
-          const truncated: string[] = [];
-          const valid = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
-            .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
-          const results = await Promise.all(valid.map((doc) => extractSupportingDocText(doc.name, doc.content).then((r) => ({ doc, ...r }))));
-          for (const { doc, content, truncated: wasTruncated } of results) {
-            if (content) docs.push({ name: doc.name, content });
-            if (wasTruncated) truncated.push(doc.name);
-          }
-          return { supportingDocs: docs, truncatedDocs: truncated };
-        })(),
-      ]);
+        const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
+        // Pass only the AI doc names to the user prompt so the AI knows exactly what to generate
+        const userPrompt = buildUserPrompt({ ...projectData, docsRequired: aiDocNames });
 
-      const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
-      const userPrompt = buildUserPrompt(projectData);
-
-      let aiContent: string;
-      if (settings.provider === "anthropic") {
-        const client = new Anthropic({ apiKey: getAnthropicKey() });
-        const message = await client.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 8192,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        });
-        aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
-      } else {
-        const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
-        const completion = await client.chat.completions.create({
-          model: "gpt-5.2",
-          max_completion_tokens: 8192,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        });
-        aiContent = completion.choices[0]?.message?.content ?? "";
-      }
-
-      const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
-      type AiDoc = { name: string; filename: string; format?: string; content?: string; sheets?: Array<{ name: string; headers: string[]; rows: string[][] }> };
-      let aiDocs: AiDoc[] = [];
-      if (jsonMatch) {
-        try {
-          const p = JSON.parse(jsonMatch[1]);
-          aiDocs = p.documents ?? [];
-        } catch {
-          aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
-        }
-      } else {
-        aiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
-      }
-
-      // Tell the client how many documents are coming
-      send({ type: "start", count: aiDocs.length, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
-
-      // Build and stream each document as soon as it's ready
-      await Promise.all(aiDocs.map(async (doc) => {
-        const fmt = doc.format ?? "txt";
-        let filename = doc.filename ?? `${doc.name}.txt`;
-        let fileBuffer: Buffer;
-        let preview: string;
-
-        if (fmt === "xlsx" && doc.sheets?.length) {
-          fileBuffer = buildXlsxBuffer(doc.sheets);
-          filename = filename.replace(/\.[^.]+$/, ".xlsx");
-          preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
-        } else if (fmt === "docx" && doc.content) {
-          fileBuffer = await buildDocxBuffer(doc.content);
-          filename = filename.replace(/\.[^.]+$/, ".docx");
-          preview = doc.content;
+        let aiContent: string;
+        if (settings.provider === "anthropic") {
+          const client = new Anthropic({ apiKey: getAnthropicKey() });
+          const message = await client.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 8192,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
+          });
+          aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
         } else {
-          fileBuffer = Buffer.from(doc.content ?? "", "utf8");
-          filename = filename.replace(/\.[^.]+$/, ".txt");
-          preview = doc.content ?? "";
+          const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
+          const completion = await client.chat.completions.create({
+            model: "gpt-5.2",
+            max_completion_tokens: 8192,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
+          });
+          aiContent = completion.choices[0]?.message?.content ?? "";
         }
 
-        send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
-      }));
+        const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
+        type AiDoc = { name: string; filename: string; format?: string; content?: string; sheets?: Array<{ name: string; headers: string[]; rows: string[][] }> };
+        let parsedAiDocs: AiDoc[] = [];
+        if (jsonMatch) {
+          try {
+            const p = JSON.parse(jsonMatch[1]);
+            parsedAiDocs = p.documents ?? [];
+          } catch {
+            parsedAiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
+          }
+        } else {
+          parsedAiDocs = [{ name: "Generated Output", filename: `${projectData.sheetRef}_${projectData.client}_Output.txt`, format: "txt", content: aiContent }];
+        }
 
-      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: aiDocs.length, provider: settings.provider, supportingDocsCount: supportingDocs.length });
+        await Promise.all(parsedAiDocs.map(async (doc) => {
+          const fmt = doc.format ?? "txt";
+          let filename = doc.filename ?? `${doc.name}.txt`;
+          let fileBuffer: Buffer;
+          let preview: string;
+
+          if (fmt === "xlsx" && doc.sheets?.length) {
+            fileBuffer = buildXlsxBuffer(doc.sheets);
+            filename = filename.replace(/\.[^.]+$/, ".xlsx");
+            preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
+          } else if (fmt === "docx" && doc.content) {
+            fileBuffer = await buildDocxBuffer(doc.content);
+            filename = filename.replace(/\.[^.]+$/, ".docx");
+            preview = doc.content;
+          } else {
+            fileBuffer = Buffer.from(doc.content ?? "", "utf8");
+            filename = filename.replace(/\.[^.]+$/, ".txt");
+            preview = doc.content ?? "";
+          }
+
+          send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
+        }));
+      }
+
+      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length });
       send({ type: "done", provider: settings.provider });
       res.end();
     } catch (err: unknown) {

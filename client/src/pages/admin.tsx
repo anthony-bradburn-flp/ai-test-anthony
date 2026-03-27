@@ -150,9 +150,11 @@ export default function AdminPage() {
   const [showAddTemplate, setShowAddTemplate] = useState(false);
   const [newTplName, setNewTplName] = useState("");
   const [newTplType, setNewTplType] = useState("");
+  const [newTplMode, setNewTplMode] = useState<"ai" | "passthrough">("ai");
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editTplName, setEditTplName] = useState("");
   const [editTplType, setEditTplType] = useState("");
+  const [editTplMode, setEditTplMode] = useState<"ai" | "passthrough">("ai");
 
   // Edit User state
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -260,7 +262,7 @@ export default function AdminPage() {
   };
 
   // Template API
-  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number };
+  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number; generateMode?: "ai" | "passthrough" };
 
   const { data: templatesData, isLoading: templatesLoading } = useQuery<ApiTemplate[]>({
     queryKey: ["/api/admin/templates"],
@@ -272,31 +274,39 @@ export default function AdminPage() {
   });
 
   const createTemplateMutation = useMutation({
-    mutationFn: async (data: { name: string; type: string }) => {
+    mutationFn: async (data: { name: string; type: string; generateMode: "ai" | "passthrough" }) => {
       const res = await fetch("/api/admin/templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error("Failed to create template");
-      return res.json();
+      // PATCH immediately to set generateMode (POST only sets name/type)
+      const created = await res.json();
+      await fetch(`/api/admin/templates/${created.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generateMode: data.generateMode }),
+      });
+      return created;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/templates"] });
       setShowAddTemplate(false);
       setNewTplName("");
       setNewTplType("");
+      setNewTplMode("ai");
       toast.success("Template created");
     },
     onError: () => toast.error("Failed to create template"),
   });
 
   const updateTemplateMutation = useMutation({
-    mutationFn: async (data: { id: string; name: string; type: string }) => {
+    mutationFn: async (data: { id: string; name: string; type: string; generateMode: "ai" | "passthrough" }) => {
       const res = await fetch(`/api/admin/templates/${data.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: data.name, type: data.type }),
+        body: JSON.stringify({ name: data.name, type: data.type, generateMode: data.generateMode }),
       });
       if (!res.ok) throw new Error("Failed to update template");
       return res.json();
@@ -375,13 +385,13 @@ export default function AdminPage() {
   const handleCreateTemplate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTplName.trim() || !newTplType.trim()) return;
-    createTemplateMutation.mutate({ name: newTplName.trim(), type: newTplType.trim() });
+    createTemplateMutation.mutate({ name: newTplName.trim(), type: newTplType.trim(), generateMode: newTplMode });
   };
 
   const handleEditTemplate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTemplateId || !editTplName.trim() || !editTplType.trim()) return;
-    updateTemplateMutation.mutate({ id: editingTemplateId, name: editTplName.trim(), type: editTplType.trim() });
+    updateTemplateMutation.mutate({ id: editingTemplateId, name: editTplName.trim(), type: editTplType.trim(), generateMode: editTplMode });
   };
 
   // Package API
@@ -806,6 +816,19 @@ export default function AdminPage() {
                       <Input id="new-tpl-type" value={newTplType} onChange={(e) => setNewTplType(e.target.value)} placeholder="e.g. Excel (.xlsx)" required />
                     </div>
                   </div>
+                  <div className="space-y-1.5">
+                    <Label>Generation Mode</Label>
+                    <RadioGroup value={newTplMode} onValueChange={(v) => setNewTplMode(v as "ai" | "passthrough")} className="flex gap-4">
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="ai" id="new-mode-ai" />
+                        <Label htmlFor="new-mode-ai" className="font-normal cursor-pointer">AI Generate — AI fills in this template with project data</Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="passthrough" id="new-mode-pass" />
+                        <Label htmlFor="new-mode-pass" className="font-normal cursor-pointer">Pass-through — Include template file as-is (no AI)</Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
                   <div className="flex gap-2">
                     <Button type="submit" size="sm" className="font-bold" disabled={createTemplateMutation.isPending}>
                       {createTemplateMutation.isPending ? "Creating…" : "Create Template"}
@@ -842,6 +865,19 @@ export default function AdminPage() {
                                   <Input id="edit-tpl-type" value={editTplType} onChange={(e) => setEditTplType(e.target.value)} required />
                                 </div>
                               </div>
+                              <div className="space-y-1.5">
+                                <Label>Generation Mode</Label>
+                                <RadioGroup value={editTplMode} onValueChange={(v) => setEditTplMode(v as "ai" | "passthrough")} className="flex gap-4">
+                                  <div className="flex items-center gap-2">
+                                    <RadioGroupItem value="ai" id="edit-mode-ai" />
+                                    <Label htmlFor="edit-mode-ai" className="font-normal cursor-pointer">AI Generate</Label>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <RadioGroupItem value="passthrough" id="edit-mode-pass" />
+                                    <Label htmlFor="edit-mode-pass" className="font-normal cursor-pointer">Pass-through</Label>
+                                  </div>
+                                </RadioGroup>
+                              </div>
                               <div className="flex gap-2">
                                 <Button type="submit" size="sm" className="font-bold" disabled={updateTemplateMutation.isPending}>
                                   {updateTemplateMutation.isPending ? "Saving…" : "Save Changes"}
@@ -859,6 +895,9 @@ export default function AdminPage() {
                           <div className="flex items-center gap-2">
                             <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             <span>{tpl.name}</span>
+                            <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", tpl.generateMode === "passthrough" ? "border-amber-400 text-amber-600" : "border-blue-400 text-blue-600")}>
+                              {tpl.generateMode === "passthrough" ? "Pass-through" : "AI Generate"}
+                            </Badge>
                           </div>
                           {tpl.originalFilename && (
                             <p className="text-xs text-emerald-600 mt-0.5 ml-6">
@@ -880,7 +919,7 @@ export default function AdminPage() {
                               {tpl.originalFilename ? "Replace" : "Upload"}
                             </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
-                              onClick={() => { setEditingTemplateId(tpl.id); setEditTplName(tpl.name); setEditTplType(tpl.type); setShowAddTemplate(false); }}>
+                              onClick={() => { setEditingTemplateId(tpl.id); setEditTplName(tpl.name); setEditTplType(tpl.type); setEditTplMode(tpl.generateMode ?? "ai"); setShowAddTemplate(false); }}>
                               <Edit2 className="h-4 w-4" />
                             </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
