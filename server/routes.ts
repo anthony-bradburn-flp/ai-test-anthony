@@ -394,6 +394,15 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // --- Read-only endpoints for authenticated (non-admin) users ---
+  app.get("/api/templates", requireAuth, async (_req, res) => {
+    res.json(await storage.listTemplates());
+  });
+
+  app.get("/api/packages", requireAuth, async (_req, res) => {
+    res.json(await storage.listPackages());
+  });
+
   // --- Document Generation ---
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
