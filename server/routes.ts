@@ -564,8 +564,54 @@ export async function registerRoutes(
         send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
       }
 
-      // Stream placeholder docs — fill {tags} in the template file with form data
-      const placeholderData = buildPlaceholderData(projectData);
+      // For placeholder templates, call AI to generate table/loop array data
+      // (scalar fields like {client} come from the form; loop arrays like {#risks} need AI)
+      let aiArrays: Record<string, unknown[]> = { actions: [], risks: [], assumptions: [], decisions: [], comms: [] };
+      if (placeholderDocNames.length > 0) {
+        try {
+          console.log("[generate] calling AI for placeholder array data…");
+          const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
+          let arrayJson = "";
+          if (settings.provider === "anthropic") {
+            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
+            const msg = await ac.messages.create({
+              model: "claude-sonnet-4-6",
+              max_tokens: 4096,
+              system: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text.",
+              messages: [{ role: "user", content: arrayPrompt }],
+            });
+            arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
+          } else {
+            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+            const comp = await oc.chat.completions.create({
+              model: "gpt-5.2",
+              max_completion_tokens: 4096,
+              messages: [
+                { role: "system", content: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text." },
+                { role: "user", content: arrayPrompt },
+              ],
+            });
+            arrayJson = comp.choices[0]?.message?.content ?? "{}";
+          }
+          // Strip any accidental code fences the model may have added
+          const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
+          const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
+          if (j0 >= 0 && j1 > j0) {
+            const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
+            if (Array.isArray(parsed.actions))     aiArrays.actions     = parsed.actions;
+            if (Array.isArray(parsed.risks))       aiArrays.risks       = parsed.risks;
+            if (Array.isArray(parsed.assumptions)) aiArrays.assumptions = parsed.assumptions;
+            if (Array.isArray(parsed.decisions))   aiArrays.decisions   = parsed.decisions;
+            if (Array.isArray(parsed.comms))       aiArrays.comms       = parsed.comms;
+          }
+          console.log(`[generate] placeholder arrays: actions=${aiArrays.actions.length} risks=${aiArrays.risks.length} assumptions=${aiArrays.assumptions.length} decisions=${aiArrays.decisions.length} comms=${aiArrays.comms.length}`);
+        } catch (err) {
+          console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
+        }
+      }
+
+      // Stream placeholder docs — fill {tags} in the template file with form data + AI arrays
+      const placeholderData = buildPlaceholderData(projectData, aiArrays);
       for (const docName of placeholderDocNames) {
         const tpl = findTemplate(docName)!;
         const ext = extname(tpl.originalFilename ?? "").toLowerCase();
@@ -600,7 +646,7 @@ export async function registerRoutes(
 
         let aiContent: string;
         if (settings.provider === "anthropic") {
-          const client = new Anthropic({ apiKey: getAnthropicKey() });
+          const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000 });
           const message = await client.messages.create({
             model: "claude-sonnet-4-6",
             max_tokens: 8192,
@@ -609,7 +655,7 @@ export async function registerRoutes(
           });
           aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
         } else {
-          const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
+          const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
           const completion = await client.chat.completions.create({
             model: "gpt-5.2",
             max_completion_tokens: 16384,
@@ -760,7 +806,7 @@ function sanitizeText(text: string): string {
 
 // ── Placeholder template filling ─────────────────────────────────────────────
 
-function buildPlaceholderData(projectData: GenerateRequest): Record<string, unknown> {
+function buildPlaceholderData(projectData: GenerateRequest, aiArrays: Record<string, unknown[]> = {}): Record<string, unknown> {
   const sponsor = projectData.clientStakeholders[projectData.sponsorIndex];
   return {
     sheet_ref:    projectData.sheetRef,
@@ -782,13 +828,59 @@ function buildPlaceholderData(projectData: GenerateRequest): Record<string, unkn
       percentage: m.percentage ?? "",
       date:       m.date ?? "",
     })),
-    // Loop arrays for RAID/Risk content — left empty; user fills these in the file
-    actions:     [],
-    risks:       [],
-    assumptions: [],
-    decisions:   [],
-    comms:       [],
+    // Loop arrays populated by AI call in generate route
+    actions:     aiArrays.actions     ?? [],
+    risks:       aiArrays.risks       ?? [],
+    assumptions: aiArrays.assumptions ?? [],
+    decisions:   aiArrays.decisions   ?? [],
+    comms:       aiArrays.comms       ?? [],
   };
+}
+
+/** Build a focused prompt asking the AI for structured JSON array data for placeholder templates */
+function buildPlaceholderArrayPrompt(
+  projectData: GenerateRequest,
+  supportingDocs: Array<{ name: string; content: string }>
+): string {
+  const lines: string[] = [
+    "Generate initial project governance content for the following project.",
+    "",
+    `Project Name: ${projectData.projectName}`,
+    `Project Type: ${projectData.projectType}`,
+    `Client: ${projectData.client}`,
+    `Start: ${projectData.startDate}   End: ${projectData.endDate}`,
+    `Summary: ${projectData.summary}`,
+  ];
+
+  if (projectData.flipsideStakeholders?.length) {
+    lines.push(`Delivery Team: ${projectData.flipsideStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+  }
+  if (projectData.clientStakeholders?.length) {
+    lines.push(`Client Stakeholders: ${projectData.clientStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+  }
+
+  if (supportingDocs.length > 0) {
+    lines.push("", "Supporting Documents (excerpts):");
+    for (const doc of supportingDocs) {
+      lines.push(`--- ${doc.name} ---`, doc.content.slice(0, 800));
+    }
+  }
+
+  lines.push(
+    "",
+    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with 3-5 realistic items each:",
+    `{`,
+    `  "actions": [{"id":1,"description":"","owner":"","due_date":"DD/MM/YYYY","priority":"High","status":"Open"}],`,
+    `  "risks": [{"id":1,"category":"","description":"","likelihood":"Medium","impact":"High","rag":"Amber","owner":"","mitigation":"","review_date":"DD/MM/YYYY","status":"Open"}],`,
+    `  "assumptions": [{"id":1,"description":"","owner":"","date_logged":"DD/MM/YYYY","status":"Open"}],`,
+    `  "decisions": [{"id":1,"decision":"","made_by":"","date":"DD/MM/YYYY","impact":"","status":"Open"}],`,
+    `  "comms": [{"audience":"","message":"","channel":"","frequency":"","owner":"","notes":""}]`,
+    `}`,
+    "",
+    "Use real values — no placeholder text like 'string' or 'example'. Base content on the project details above."
+  );
+
+  return lines.join("\n");
 }
 
 /** Fill a .docx template using docxtemplater — handles loops and scalar tags */
