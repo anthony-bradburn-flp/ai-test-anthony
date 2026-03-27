@@ -1200,8 +1200,13 @@ export default function AdminPage() {
                               {aiSettings.trainingDocFilename}
                             </p>
                             <p className="text-xs text-muted-foreground">
-                              {formatDocSize(aiSettings.trainingDocSize)} · Uploaded {formatDocDate(aiSettings.trainingDocUploadedAt)}
+                              {formatDocSize(aiSettings.trainingDocSize)} · ~{Math.round((aiSettings.trainingDocSize ?? 0) / 4).toLocaleString()} tokens · Uploaded {formatDocDate(aiSettings.trainingDocUploadedAt)}
                             </p>
+                            {(aiSettings.trainingDocSize ?? 0) > 30 * 1024 && (
+                              <p className="text-xs text-amber-600 mt-1">
+                                ⚠ Large training doc — adds ~{Math.round((aiSettings.trainingDocSize ?? 0) / 4).toLocaleString()} tokens to every generation prompt, significantly slowing AI response time. Trim to under 30 KB for best performance.
+                              </p>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
