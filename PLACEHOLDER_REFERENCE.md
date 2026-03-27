@@ -62,15 +62,15 @@ Header cell example (A1): `{sheet_ref} — {project_name} — Actions`
 | Date Logged | `{date_logged}` |
 | Status | `{status}{/assumptions}` |
 
-### Sheet: Issues / Dependencies
+### Sheet: Decisions
 | Column | Placeholder |
 |---|---|
-| ID | `{#issues}{id}` |
-| Description | `{description}` |
-| Owner | `{owner}` |
-| Date Raised | `{date_raised}` |
+| ID | `{#decisions}{id}` |
+| Decision | `{decision}` |
+| Made By | `{made_by}` |
+| Date | `{date}` |
 | Impact | `{impact}` |
-| Status | `{status}{/issues}` |
+| Status | `{status}{/decisions}` |
 
 ---
 
