@@ -7,7 +7,7 @@ import { join } from "path";
 const DATA_DIR = join(process.cwd(), "data");
 const DATA_FILE = join(DATA_DIR, "store.json");
 
-function loadPersistedData(): { users: User[]; templates: Template[]; packages: Package[] } {
+function loadPersistedData(): { users: User[]; templates: Template[]; packages: Package[]; aiSettings?: Partial<AiSettings> } {
   try {
     if (existsSync(DATA_FILE)) {
       return JSON.parse(readFileSync(DATA_FILE, "utf8"));
@@ -18,10 +18,10 @@ function loadPersistedData(): { users: User[]; templates: Template[]; packages: 
   return { users: [], templates: [], packages: [] };
 }
 
-function savePersistedData(users: User[], templates: Template[], packages: Package[]) {
+function savePersistedData(users: User[], templates: Template[], packages: Package[], aiSettings: AiSettings) {
   try {
     if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(DATA_FILE, JSON.stringify({ users, templates, packages }, null, 2));
+    writeFileSync(DATA_FILE, JSON.stringify({ users, templates, packages, aiSettings }, null, 2));
   } catch (e) {
     console.error("[storage] Failed to persist data:", e);
   }
@@ -143,7 +143,8 @@ export class MemStorage implements IStorage {
 
   constructor() {
     const persisted = loadPersistedData();
-    this.aiSettings = { ...DEFAULT_AI_SETTINGS };
+    // Restore AI settings from disk, falling back to defaults for any missing fields
+    this.aiSettings = { ...DEFAULT_AI_SETTINGS, ...(persisted.aiSettings ?? {}) };
     // Restore persisted data, falling back to defaults for templates/packages
     this.users = new Map(persisted.users.map((u) => [u.id, u]));
     this.templates = persisted.templates.length
@@ -170,6 +171,7 @@ export class MemStorage implements IStorage {
       Array.from(this.users.values()),
       Array.from(this.templates.values()),
       Array.from(this.packages.values()),
+      this.aiSettings,
     );
   }
 
@@ -292,6 +294,7 @@ export class MemStorage implements IStorage {
 
   async updateAiSettings(settings: Partial<AiSettings>): Promise<AiSettings> {
     this.aiSettings = { ...this.aiSettings, ...settings };
+    this.persist();
     return { ...this.aiSettings };
   }
 }
