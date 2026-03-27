@@ -657,6 +657,7 @@ async function extractSupportingDocText(filename: string, base64Content: string)
       // PDF / PPT / PPTX — cannot extract text without additional libraries
       return { content: `[File attached: ${filename} — content not extracted]`, truncated: false };
     }
+    full = sanitizeText(full);
     const truncated = full.length > MAX_CHARS;
     return { content: truncated ? full.slice(0, MAX_CHARS) : full, truncated };
   } catch {
@@ -670,7 +671,7 @@ async function extractFileContent(filePath: string, originalFilename: string): P
     if (ext === ".docx") {
       const buffer = readFileSync(filePath);
       const result = await mammoth.extractRawText({ buffer });
-      return result.value;
+      return sanitizeText(result.value);
     }
     if (ext === ".xlsx" || ext === ".xls") {
       const workbook = XLSX.readFile(filePath);
@@ -679,15 +680,21 @@ async function extractFileContent(filePath: string, originalFilename: string): P
         lines.push(`=== Sheet: ${sheetName} ===`);
         lines.push(XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]));
       }
-      return lines.join("\n");
+      return sanitizeText(lines.join("\n"));
     }
     if (ext === ".txt" || ext === ".md") {
-      return readFileSync(filePath, "utf8");
+      return sanitizeText(readFileSync(filePath, "utf8"));
     }
     return "";
   } catch {
     return "";
   }
+}
+
+/** Remove control characters (except \t \n \r) that break JSON serialization */
+function sanitizeText(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
 }
 
 function buildSystemPrompt(
