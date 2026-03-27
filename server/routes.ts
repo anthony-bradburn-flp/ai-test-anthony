@@ -892,7 +892,12 @@ function fillDocxTemplate(filePath: string, data: Record<string, unknown>): Buff
   return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
 
-/** Fill an .xlsx template — expands {#array}...{/array} loops and replaces scalar {tags} */
+/** Fill an .xlsx template — expands same-row {#array}...{/array} loops and replaces scalar {tags}.
+ *
+ * Loop format (from PLACEHOLDER_REFERENCE.md): start tag {#name} and end tag {/name} are on the
+ * SAME row as the field tags, e.g. first cell "{#actions}{id}", last cell "{status}{/actions}".
+ * Each such row is cloned once per array item; rows without a loop tag get scalar substitution.
+ */
 function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buffer {
   const workbook = XLSX.readFile(filePath, { cellStyles: true });
 
@@ -907,7 +912,33 @@ function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buff
 
 type XCell = XLSX.CellObject | undefined;
 
-/** Substitute scalar {tag} values in a row using data; skips array values */
+/** Return the loop array name if any cell in the row contains {#name}; else null */
+function xlsxLoopName(row: XCell[]): string | null {
+  for (const cell of row) {
+    if (cell && typeof cell.v === "string") {
+      const m = cell.v.match(/\{#(\w+)\}/);
+      if (m) return m[1];
+    }
+  }
+  return null;
+}
+
+/** Clone a loop-template row for one item, stripping {#name}/{/name} then substituting fields */
+function xlsxExpandRow(row: XCell[], loopName: string, item: Record<string, unknown>): XCell[] {
+  const startRe = new RegExp(`\\{#${loopName}\\}`, "g");
+  const endRe   = new RegExp(`\\{/${loopName}\\}`, "g");
+  return row.map(cell => {
+    if (!cell || typeof cell.v !== "string") return cell;
+    let val = cell.v.replace(startRe, "").replace(endRe, "");
+    val = val.replace(/\{(\w+)\}/g, (_, key) => {
+      const v = item[key];
+      return v !== undefined ? String(v) : "";
+    });
+    return { ...cell, v: val, w: val, t: "s" as const };
+  });
+}
+
+/** Substitute scalar {tag} values in a regular (non-loop) row */
 function xlsxSubRow(row: XCell[], data: Record<string, unknown>): XCell[] {
   return row.map(cell => {
     if (!cell || typeof cell.v !== "string" || !cell.v.includes("{")) return cell;
@@ -919,27 +950,11 @@ function xlsxSubRow(row: XCell[], data: Record<string, unknown>): XCell[] {
   });
 }
 
-/** Check whether any cell in a row contains {#arrayName} and return the name */
-function xlsxLoopStart(row: XCell[]): string | null {
-  for (const cell of row) {
-    if (cell && typeof cell.v === "string") {
-      const m = cell.v.match(/\{#(\w+)\}/);
-      if (m) return m[1];
-    }
-  }
-  return null;
-}
-
-/** Check whether any cell in a row contains {/arrayName} */
-function xlsxLoopEnd(row: XCell[], name: string): boolean {
-  return row.some(c => c && typeof c.v === "string" && c.v.includes(`{/${name}}`));
-}
-
 function xlsxFillSheet(ws: XLSX.WorkSheet, data: Record<string, unknown>): void {
   const range = XLSX.utils.decode_range(ws["!ref"]!);
   const numCols = range.e.c - range.s.c + 1;
 
-  // Read all rows into memory as cell-object arrays (preserves style refs)
+  // Read all rows into memory as cell-object arrays (copies preserve style refs)
   const inputRows: XCell[][] = [];
   for (let r = range.s.r; r <= range.e.r; r++) {
     const row: XCell[] = [];
@@ -949,42 +964,30 @@ function xlsxFillSheet(ws: XLSX.WorkSheet, data: Record<string, unknown>): void 
     inputRows.push(row);
   }
 
-  // Expand loops and substitute scalars
+  // Process each row: loop rows are expanded, regular rows get scalar substitution
   const outputRows: XCell[][] = [];
-  let i = 0;
-  while (i < inputRows.length) {
-    const loopName = xlsxLoopStart(inputRows[i]);
+  for (const row of inputRows) {
+    const loopName = xlsxLoopName(row);
     if (loopName) {
-      // Collect template rows between {#name} and {/name}
-      const templateRows: XCell[][] = [];
-      i++;
-      while (i < inputRows.length && !xlsxLoopEnd(inputRows[i], loopName)) {
-        templateRows.push(inputRows[i]);
-        i++;
-      }
-      i++; // skip end-marker row
-
-      // Expand: clone template rows for each item, substituting field values
+      // Same-row loop: replicate this row once per array item
       const items = Array.isArray(data[loopName])
         ? (data[loopName] as Record<string, unknown>[])
         : [];
       for (const item of items) {
-        for (const tplRow of templateRows) {
-          outputRows.push(xlsxSubRow(tplRow, item));
-        }
+        outputRows.push(xlsxExpandRow(row, loopName, item));
       }
+      // Zero items → row is omitted entirely (clean empty table body)
     } else {
-      outputRows.push(xlsxSubRow(inputRows[i], data));
-      i++;
+      outputRows.push(xlsxSubRow(row, data));
     }
   }
 
-  // Clear existing cells (keep sheet meta like !merges, !cols, !rows)
+  // Clear existing data cells (keep sheet metadata: !ref, !cols, !merges, etc.)
   for (const key of Object.keys(ws)) {
     if (!key.startsWith("!")) delete ws[key];
   }
 
-  // Write expanded rows back
+  // Write the expanded rows back
   for (let r = 0; r < outputRows.length; r++) {
     for (let c = 0; c < numCols && c < outputRows[r].length; c++) {
       const cell = outputRows[r][c];
