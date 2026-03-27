@@ -892,67 +892,114 @@ function fillDocxTemplate(filePath: string, data: Record<string, unknown>): Buff
   return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
 
-/** Fill an .xlsx template — replaces scalar {tags} in cells; removes empty loop rows */
+/** Fill an .xlsx template — expands {#array}...{/array} loops and replaces scalar {tags} */
 function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buffer {
-  const workbook = XLSX.readFile(filePath);
+  const workbook = XLSX.readFile(filePath, { cellStyles: true });
 
   for (const sheetName of workbook.SheetNames) {
     const ws = workbook.Sheets[sheetName];
     if (!ws["!ref"]) continue;
-    const range = XLSX.utils.decode_range(ws["!ref"]);
+    xlsxFillSheet(ws, data);
+  }
 
-    // Collect rows that are loop template rows (contain {# or {/) — remove them
-    const loopRows = new Set<number>();
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        if (cell && typeof cell.v === "string" && /\{[#/]/.test(cell.v)) {
-          loopRows.add(r);
-        }
-      }
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true }) as Buffer;
+}
+
+type XCell = XLSX.CellObject | undefined;
+
+/** Substitute scalar {tag} values in a row using data; skips array values */
+function xlsxSubRow(row: XCell[], data: Record<string, unknown>): XCell[] {
+  return row.map(cell => {
+    if (!cell || typeof cell.v !== "string" || !cell.v.includes("{")) return cell;
+    const filled = cell.v.replace(/\{(\w+)\}/g, (_, key) => {
+      const val = (data as Record<string, unknown>)[key];
+      return val !== undefined && !Array.isArray(val) ? String(val) : "";
+    });
+    return { ...cell, v: filled, w: filled, t: "s" as const };
+  });
+}
+
+/** Check whether any cell in a row contains {#arrayName} and return the name */
+function xlsxLoopStart(row: XCell[]): string | null {
+  for (const cell of row) {
+    if (cell && typeof cell.v === "string") {
+      const m = cell.v.match(/\{#(\w+)\}/);
+      if (m) return m[1];
     }
+  }
+  return null;
+}
 
-    // Replace scalar placeholders in non-loop rows
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      if (loopRows.has(r)) continue;
-      for (let c = range.s.c; c <= range.e.c; c++) {
-        const addr = XLSX.utils.encode_cell({ r, c });
-        const cell = ws[addr];
-        if (cell && typeof cell.v === "string" && cell.v.includes("{")) {
-          const filled = cell.v.replace(/\{(\w+)\}/g, (_, key) => {
-            const val = data[key];
-            return val !== undefined && !Array.isArray(val) ? String(val) : "";
-          });
-          cell.v = filled;
-          cell.w = filled;
-        }
-      }
+/** Check whether any cell in a row contains {/arrayName} */
+function xlsxLoopEnd(row: XCell[], name: string): boolean {
+  return row.some(c => c && typeof c.v === "string" && c.v.includes(`{/${name}}`));
+}
+
+function xlsxFillSheet(ws: XLSX.WorkSheet, data: Record<string, unknown>): void {
+  const range = XLSX.utils.decode_range(ws["!ref"]!);
+  const numCols = range.e.c - range.s.c + 1;
+
+  // Read all rows into memory as cell-object arrays (preserves style refs)
+  const inputRows: XCell[][] = [];
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row: XCell[] = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      row.push(ws[XLSX.utils.encode_cell({ r, c })]);
     }
+    inputRows.push(row);
+  }
 
-    // Delete loop rows (shift rows up)
-    if (loopRows.size > 0) {
-      const sortedLoopRows = Array.from(loopRows).sort((a, b) => b - a); // descending
-      for (const delRow of sortedLoopRows) {
-        // Shift all rows below delRow up by one
-        for (let r = delRow; r < range.e.r; r++) {
-          for (let c = range.s.c; c <= range.e.c; c++) {
-            const src = XLSX.utils.encode_cell({ r: r + 1, c });
-            const dst = XLSX.utils.encode_cell({ r, c });
-            if (ws[src]) { ws[dst] = ws[src]; } else { delete ws[dst]; }
-          }
-        }
-        // Delete last row
-        for (let c = range.s.c; c <= range.e.c; c++) {
-          delete ws[XLSX.utils.encode_cell({ r: range.e.r, c })];
-        }
-        range.e.r--;
+  // Expand loops and substitute scalars
+  const outputRows: XCell[][] = [];
+  let i = 0;
+  while (i < inputRows.length) {
+    const loopName = xlsxLoopStart(inputRows[i]);
+    if (loopName) {
+      // Collect template rows between {#name} and {/name}
+      const templateRows: XCell[][] = [];
+      i++;
+      while (i < inputRows.length && !xlsxLoopEnd(inputRows[i], loopName)) {
+        templateRows.push(inputRows[i]);
+        i++;
       }
-      ws["!ref"] = XLSX.utils.encode_range(range);
+      i++; // skip end-marker row
+
+      // Expand: clone template rows for each item, substituting field values
+      const items = Array.isArray(data[loopName])
+        ? (data[loopName] as Record<string, unknown>[])
+        : [];
+      for (const item of items) {
+        for (const tplRow of templateRows) {
+          outputRows.push(xlsxSubRow(tplRow, item));
+        }
+      }
+    } else {
+      outputRows.push(xlsxSubRow(inputRows[i], data));
+      i++;
     }
   }
 
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  // Clear existing cells (keep sheet meta like !merges, !cols, !rows)
+  for (const key of Object.keys(ws)) {
+    if (!key.startsWith("!")) delete ws[key];
+  }
+
+  // Write expanded rows back
+  for (let r = 0; r < outputRows.length; r++) {
+    for (let c = 0; c < numCols && c < outputRows[r].length; c++) {
+      const cell = outputRows[r][c];
+      if (cell !== undefined) {
+        ws[XLSX.utils.encode_cell({ r: range.s.r + r, c: range.s.c + c })] = cell;
+      }
+    }
+  }
+
+  ws["!ref"] = XLSX.utils.encode_range({
+    s: range.s,
+    e: { r: range.s.r + Math.max(outputRows.length - 1, 0), c: range.e.c },
+  });
 }
+
 
 function buildSystemPrompt(
   basePrompt: string,
