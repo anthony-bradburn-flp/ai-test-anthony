@@ -11,6 +11,8 @@ import JSZip from "jszip";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } from "docx";
+import PizZip from "pizzip";
+import Docxtemplater from "docxtemplater";
 import { storage, verifyPassword, hashPassword } from "./storage";
 import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey } from "./secrets";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
@@ -521,13 +523,17 @@ export async function registerRoutes(
         }
       }
 
-      // Split docs into passthrough (template file served as-is) vs AI-generated
-      const isPassthrough = (docName: string) => {
+      // Classify each doc: passthrough | placeholder | ai
+      const classify = (docName: string) => {
         const tpl = findTemplate(docName);
-        return !!(tpl?.filePath && existsSync(tpl.filePath) && tpl.generateMode === "passthrough");
+        if (!tpl?.filePath || !existsSync(tpl.filePath)) return "ai";
+        if (tpl.generateMode === "passthrough")  return "passthrough";
+        if (tpl.generateMode === "placeholder")  return "placeholder";
+        return "ai";
       };
-      const passthroughDocNames = allDocNames.filter(isPassthrough);
-      const aiDocNames = allDocNames.filter((n) => !isPassthrough(n));
+      const passthroughDocNames = allDocNames.filter((n) => classify(n) === "passthrough");
+      const placeholderDocNames = allDocNames.filter((n) => classify(n) === "placeholder");
+      const aiDocNames          = allDocNames.filter((n) => classify(n) === "ai");
 
       // Load template contents for AI docs — cap each at 4,000 chars so the
       // AI gets enough structure to follow without bloating the prompt
@@ -556,6 +562,30 @@ export async function registerRoutes(
         const safeName = docName.replace(/[^a-zA-Z0-9 -]/g, "").replace(/\s+/g, "_");
         const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
         send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
+      }
+
+      // Stream placeholder docs — fill {tags} in the template file with form data
+      const placeholderData = buildPlaceholderData(projectData);
+      for (const docName of placeholderDocNames) {
+        const tpl = findTemplate(docName)!;
+        const ext = extname(tpl.originalFilename ?? "").toLowerCase();
+        const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+        const safeName = docName.replace(/[^a-zA-Z0-9 -]/g, "").replace(/\s+/g, "_");
+        const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
+        try {
+          let fileBuffer: Buffer;
+          if (ext === ".docx") {
+            fileBuffer = fillDocxTemplate(tpl.filePath!, placeholderData);
+          } else if (ext === ".xlsx" || ext === ".xls") {
+            fileBuffer = fillXlsxTemplate(tpl.filePath!, placeholderData);
+          } else {
+            fileBuffer = readFileSync(tpl.filePath!);
+          }
+          send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Placeholder template filled: ${tpl.originalFilename}]` } });
+        } catch (err) {
+          console.error(`[generate] placeholder fill failed for ${docName}:`, err);
+          send({ type: "document", document: { name: docName, filename, format: fmt, content: readFileSync(tpl.filePath!).toString("base64"), preview: `[Placeholder fill failed — template included as-is]` } });
+        }
       }
 
       // AI-generate the remaining docs
@@ -632,7 +662,7 @@ export async function registerRoutes(
         }));
       }
 
-      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length });
+      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
       send({ type: "done", provider: settings.provider });
       res.end();
     } catch (err: unknown) {
@@ -726,6 +756,110 @@ async function extractFileContent(filePath: string, originalFilename: string): P
 function sanitizeText(text: string): string {
   // eslint-disable-next-line no-control-regex
   return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+// ── Placeholder template filling ─────────────────────────────────────────────
+
+function buildPlaceholderData(projectData: GenerateRequest): Record<string, unknown> {
+  const sponsor = projectData.clientStakeholders[projectData.sponsorIndex];
+  return {
+    sheet_ref:    projectData.sheetRef,
+    client:       projectData.client,
+    project_name: projectData.projectName,
+    project_type: projectData.projectType,
+    project_size: (projectData as Record<string, unknown>).projectSize ?? "",
+    value:        (projectData as Record<string, unknown>).value ?? "",
+    start_date:   projectData.startDate,
+    end_date:     projectData.endDate,
+    summary:      projectData.summary,
+    sponsor_name: sponsor?.name ?? "",
+    sponsor_role: sponsor?.role ?? "",
+    generated_date: new Date().toLocaleDateString("en-GB"),
+    flipside_team: projectData.flipsideStakeholders.map((s) => ({ name: s.name, role: s.role })),
+    client_team:   projectData.clientStakeholders.map((s) => ({ name: s.name, role: s.role })),
+    milestones:    (projectData.billingMilestones ?? []).map((m: Record<string, unknown>) => ({
+      stage:      m.stage ?? "",
+      percentage: m.percentage ?? "",
+      date:       m.date ?? "",
+    })),
+    // Loop arrays for RAID/Risk content — left empty; user fills these in the file
+    actions:     [],
+    risks:       [],
+    assumptions: [],
+    decisions:   [],
+    comms:       [],
+  };
+}
+
+/** Fill a .docx template using docxtemplater — handles loops and scalar tags */
+function fillDocxTemplate(filePath: string, data: Record<string, unknown>): Buffer {
+  const content = readFileSync(filePath, "binary");
+  const zip = new PizZip(content);
+  const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+  doc.render(data);
+  return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
+}
+
+/** Fill an .xlsx template — replaces scalar {tags} in cells; removes empty loop rows */
+function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buffer {
+  const workbook = XLSX.readFile(filePath);
+
+  for (const sheetName of workbook.SheetNames) {
+    const ws = workbook.Sheets[sheetName];
+    if (!ws["!ref"]) continue;
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+
+    // Collect rows that are loop template rows (contain {# or {/) — remove them
+    const loopRows = new Set<number>();
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (cell && typeof cell.v === "string" && /\{[#/]/.test(cell.v)) {
+          loopRows.add(r);
+        }
+      }
+    }
+
+    // Replace scalar placeholders in non-loop rows
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      if (loopRows.has(r)) continue;
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        if (cell && typeof cell.v === "string" && cell.v.includes("{")) {
+          const filled = cell.v.replace(/\{(\w+)\}/g, (_, key) => {
+            const val = data[key];
+            return val !== undefined && !Array.isArray(val) ? String(val) : "";
+          });
+          cell.v = filled;
+          cell.w = filled;
+        }
+      }
+    }
+
+    // Delete loop rows (shift rows up)
+    if (loopRows.size > 0) {
+      const sortedLoopRows = Array.from(loopRows).sort((a, b) => b - a); // descending
+      for (const delRow of sortedLoopRows) {
+        // Shift all rows below delRow up by one
+        for (let r = delRow; r < range.e.r; r++) {
+          for (let c = range.s.c; c <= range.e.c; c++) {
+            const src = XLSX.utils.encode_cell({ r: r + 1, c });
+            const dst = XLSX.utils.encode_cell({ r, c });
+            if (ws[src]) { ws[dst] = ws[src]; } else { delete ws[dst]; }
+          }
+        }
+        // Delete last row
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          delete ws[XLSX.utils.encode_cell({ r: range.e.r, c })];
+        }
+        range.e.r--;
+      }
+      ws["!ref"] = XLSX.utils.encode_range(range);
+    }
+  }
+
+  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }
 
 function buildSystemPrompt(

@@ -146,12 +146,12 @@ export default function AdminPage() {
   const [showAddTemplate, setShowAddTemplate] = useState(false);
   const [newTplName, setNewTplName] = useState("");
   const [newTplType, setNewTplType] = useState("");
-  const [newTplMode, setNewTplMode] = useState<"ai" | "passthrough">("ai");
+  const [newTplMode, setNewTplMode] = useState<"ai" | "passthrough" | "placeholder">("ai");
   const [newTplAlias, setNewTplAlias] = useState("");
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editTplName, setEditTplName] = useState("");
   const [editTplType, setEditTplType] = useState("");
-  const [editTplMode, setEditTplMode] = useState<"ai" | "passthrough">("ai");
+  const [editTplMode, setEditTplMode] = useState<"ai" | "passthrough" | "placeholder">("ai");
   const [editTplAlias, setEditTplAlias] = useState("");
 
   // Edit User state
@@ -258,7 +258,7 @@ export default function AdminPage() {
   };
 
   // Template API
-  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number; generateMode?: "ai" | "passthrough"; documentAlias?: string };
+  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number; generateMode?: "ai" | "passthrough" | "placeholder"; documentAlias?: string };
 
   const { data: templatesData, isLoading: templatesLoading } = useQuery<ApiTemplate[]>({
     queryKey: ["/api/admin/templates"],
@@ -831,14 +831,18 @@ export default function AdminPage() {
                   </div>
                   <div className="space-y-1.5">
                     <Label>Generation Mode</Label>
-                    <RadioGroup value={newTplMode} onValueChange={(v) => setNewTplMode(v as "ai" | "passthrough")} className="flex gap-4">
+                    <RadioGroup value={newTplMode} onValueChange={(v) => setNewTplMode(v as "ai" | "passthrough" | "placeholder")} className="flex flex-wrap gap-4">
                       <div className="flex items-center gap-2">
                         <RadioGroupItem value="ai" id="new-mode-ai" />
-                        <Label htmlFor="new-mode-ai" className="font-normal cursor-pointer">AI Generate — AI fills in this template with project data</Label>
+                        <Label htmlFor="new-mode-ai" className="font-normal cursor-pointer">AI Generate — AI writes content from scratch</Label>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <RadioGroupItem value="placeholder" id="new-mode-placeholder" />
+                        <Label htmlFor="new-mode-placeholder" className="font-normal cursor-pointer">Placeholder — Fill <code className="text-xs bg-muted px-1 rounded">{"{tags}"}</code> in template with form data</Label>
                       </div>
                       <div className="flex items-center gap-2">
                         <RadioGroupItem value="passthrough" id="new-mode-pass" />
-                        <Label htmlFor="new-mode-pass" className="font-normal cursor-pointer">Pass-through — Include template file as-is (no AI)</Label>
+                        <Label htmlFor="new-mode-pass" className="font-normal cursor-pointer">Pass-through — Include file as-is (no changes)</Label>
                       </div>
                     </RadioGroup>
                   </div>
@@ -885,10 +889,14 @@ export default function AdminPage() {
                               </div>
                               <div className="space-y-1.5">
                                 <Label>Generation Mode</Label>
-                                <RadioGroup value={editTplMode} onValueChange={(v) => setEditTplMode(v as "ai" | "passthrough")} className="flex gap-4">
+                                <RadioGroup value={editTplMode} onValueChange={(v) => setEditTplMode(v as "ai" | "passthrough" | "placeholder")} className="flex flex-wrap gap-4">
                                   <div className="flex items-center gap-2">
                                     <RadioGroupItem value="ai" id="edit-mode-ai" />
                                     <Label htmlFor="edit-mode-ai" className="font-normal cursor-pointer">AI Generate</Label>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <RadioGroupItem value="placeholder" id="edit-mode-placeholder" />
+                                    <Label htmlFor="edit-mode-placeholder" className="font-normal cursor-pointer">Placeholder</Label>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <RadioGroupItem value="passthrough" id="edit-mode-pass" />
@@ -913,8 +921,11 @@ export default function AdminPage() {
                           <div className="flex items-center gap-2">
                             <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             <span>{tpl.name}</span>
-                            <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", tpl.generateMode === "passthrough" ? "border-amber-400 text-amber-600" : "border-blue-400 text-blue-600")}>
-                              {tpl.generateMode === "passthrough" ? "Pass-through" : "AI Generate"}
+                            <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0",
+                              tpl.generateMode === "passthrough" ? "border-amber-400 text-amber-600" :
+                              tpl.generateMode === "placeholder" ? "border-emerald-400 text-emerald-600" :
+                              "border-blue-400 text-blue-600")}>
+                              {tpl.generateMode === "passthrough" ? "Pass-through" : tpl.generateMode === "placeholder" ? "Placeholder" : "AI Generate"}
                             </Badge>
                           </div>
                           {tpl.documentAlias && (
