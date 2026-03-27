@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Key, BrainCircuit, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -85,12 +85,8 @@ const INITIAL_PACKAGES = [
 ];
 
 type AiSettingsResponse = {
-  provider: "openai" | "anthropic";
-  orgId: string;
   systemPrompt: string;
   companyName: string;
-  hasOpenAIKey: boolean;
-  hasAnthropicKey: boolean;
   trainingDocFilename: string | null;
   trainingDocUploadedAt: string | null;
   trainingDocSize: number | null;
@@ -165,8 +161,6 @@ export default function AdminPage() {
 
   // AI Settings state
   const queryClient = useQueryClient();
-  const [provider, setProvider] = useState<"openai" | "anthropic">("openai");
-  const [orgId, setOrgId] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [showDocContent, setShowDocContent] = useState(false);
@@ -500,16 +494,14 @@ export default function AdminPage() {
   // Sync fetched settings into local form state once loaded
   useEffect(() => {
     if (aiSettings) {
-      setProvider(aiSettings.provider);
       setSystemPrompt(aiSettings.systemPrompt);
       setCompanyName(aiSettings.companyName);
-      setOrgId(aiSettings.orgId);
     }
   }, [aiSettings]);
 
   const saveSettingsMutation = useMutation({
     mutationFn: async () => {
-      const body: Record<string, string> = { provider, orgId, systemPrompt, companyName };
+      const body: Record<string, string> = { systemPrompt, companyName };
       const res = await fetch("/api/admin/ai-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1137,7 +1129,7 @@ export default function AdminPage() {
           <TabsContent value="settings" className="space-y-6">
             <SectionCard
               title="AI Generation Configuration"
-              description={isAdmin ? "Configure the AI provider used to automatically draft governance documents." : "View-only — contact an admin to change AI settings."}
+              description={isAdmin ? "Configure the AI generation settings and training document." : "View-only — contact an admin to change AI settings."}
               action={
                 isAdmin ? (
                   <Button
@@ -1153,63 +1145,6 @@ export default function AdminPage() {
               }
             >
               <div className="p-5 space-y-8">
-                {/* Provider */}
-                <div className="space-y-4">
-                  <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
-                    <BrainCircuit className="h-4 w-4 text-primary" />
-                    AI Provider Selection
-                  </h3>
-                  <RadioGroup
-                    value={provider}
-                    onValueChange={(v) => isAdmin && setProvider(v as "openai" | "anthropic")}
-                    className="flex flex-col gap-3 sm:flex-row sm:gap-6"
-                  >
-                    <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
-                      <RadioGroupItem value="openai" id="r-openai" />
-                      <Label htmlFor="r-openai" className="font-medium cursor-pointer">OpenAI (GPT-4o)</Label>
-                    </div>
-                    <div className="flex items-center space-x-2 border border-border p-3 rounded-md bg-background w-full sm:w-auto">
-                      <RadioGroupItem value="anthropic" id="r-anthropic" />
-                      <Label htmlFor="r-anthropic" className="font-medium cursor-pointer">Anthropic (Claude 3.5 Sonnet)</Label>
-                    </div>
-                  </RadioGroup>
-                </div>
-
-                {/* API Credentials */}
-                <div className="space-y-4 border-t border-border pt-6">
-                  <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
-                    <Key className="h-4 w-4 text-primary" />
-                    API Credentials
-                  </h3>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>OpenAI API Key</Label>
-                      <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${aiSettings?.hasOpenAIKey ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
-                        <span className={`h-2 w-2 rounded-full flex-shrink-0 ${aiSettings?.hasOpenAIKey ? "bg-green-500" : "bg-amber-400"}`} />
-                        {aiSettings?.hasOpenAIKey ? "Configured via AWS Parameter Store" : "Not set — add to AWS Parameter Store at /pm-governance/openai-api-key"}
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Anthropic API Key</Label>
-                      <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${aiSettings?.hasAnthropicKey ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
-                        <span className={`h-2 w-2 rounded-full flex-shrink-0 ${aiSettings?.hasAnthropicKey ? "bg-green-500" : "bg-amber-400"}`} />
-                        {aiSettings?.hasAnthropicKey ? "Configured via AWS Parameter Store" : "Not set — add to AWS Parameter Store at /pm-governance/anthropic-api-key"}
-                      </div>
-                    </div>
-                  </div>
-                  <p className="text-xs text-muted-foreground">API keys are stored in AWS Systems Manager Parameter Store and fetched securely at startup. They are never saved to disk or visible in the UI.</p>
-                  <div className="space-y-2">
-                    <Label htmlFor="org-id">OpenAI Organization ID <span className="font-normal text-muted-foreground">(Optional)</span></Label>
-                    <Input
-                      id="org-id"
-                      placeholder="org-..."
-                      value={orgId}
-                      onChange={(e) => setOrgId(e.target.value)}
-                      disabled={!isAdmin}
-                    />
-                  </div>
-                </div>
-
                 {/* Generation Preferences */}
                 <div className="space-y-4 border-t border-border pt-6">
                   <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
