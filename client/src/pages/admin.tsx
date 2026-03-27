@@ -737,6 +737,20 @@ export default function AdminPage() {
                                           </button>
                                         );
                                       })}
+                                      {/* Orphaned entries — in the package but no longer a template */}
+                                      {editPkgDocs
+                                        .filter((d) => !templatesData.some((t) => t.name === d))
+                                        .map((d) => (
+                                          <button
+                                            key={d}
+                                            type="button"
+                                            onClick={() => setEditPkgDocs(editPkgDocs.filter((x) => x !== d))}
+                                            title="Template no longer exists — click to remove"
+                                            className="rounded-full border px-3 py-1 text-xs font-medium transition-colors bg-destructive/10 text-destructive border-destructive/40 hover:bg-destructive hover:text-destructive-foreground line-through"
+                                          >
+                                            {d}
+                                          </button>
+                                        ))}
                                     </div>
                                   ) : (
                                     <p className="text-xs text-muted-foreground pt-1">No templates available.</p>

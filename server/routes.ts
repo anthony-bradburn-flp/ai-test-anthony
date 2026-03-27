@@ -355,6 +355,7 @@ export async function registerRoutes(
 
   app.patch("/api/admin/templates/:id", requireAdmin, async (req, res) => {
     const { name, type, generateMode, documentAlias } = req.body;
+    const existing = await storage.getTemplate(req.params.id);
     const updated = await storage.updateTemplate(req.params.id, {
       ...(name ? { name: name.trim() } : {}),
       ...(type ? { type: type.trim() } : {}),
@@ -363,6 +364,20 @@ export async function registerRoutes(
       ...(documentAlias !== undefined ? { documentAlias: documentAlias.trim() || undefined } : {}),
     });
     if (!updated) { res.status(404).json({ error: "Template not found" }); return; }
+
+    // Cascade name change to all packages
+    if (existing && name && name.trim() !== existing.name) {
+      const oldNames = [existing.name, existing.documentAlias].filter(Boolean) as string[];
+      const newName = name.trim();
+      const allPkgs = await storage.listPackages();
+      await Promise.all(allPkgs
+        .filter((p) => p.documents.some((d) => oldNames.includes(d)))
+        .map((p) => storage.updatePackage(p.id, {
+          documents: p.documents.map((d) => oldNames.includes(d) ? newName : d),
+        }))
+      );
+    }
+
     res.json(updated);
   });
 
@@ -392,7 +407,21 @@ export async function registerRoutes(
   });
 
   app.delete("/api/admin/templates/:id", requireAdmin, async (req, res) => {
+    const existing = await storage.getTemplate(req.params.id);
     await storage.deleteTemplate(req.params.id);
+
+    // Remove this template's name (and alias) from all packages
+    if (existing) {
+      const namesToRemove = [existing.name, existing.documentAlias].filter(Boolean) as string[];
+      const allPkgs = await storage.listPackages();
+      await Promise.all(allPkgs
+        .filter((p) => p.documents.some((d) => namesToRemove.includes(d)))
+        .map((p) => storage.updatePackage(p.id, {
+          documents: p.documents.filter((d) => !namesToRemove.includes(d)),
+        }))
+      );
+    }
+
     res.json({ ok: true });
   });
 
