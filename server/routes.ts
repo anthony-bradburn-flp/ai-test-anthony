@@ -613,7 +613,9 @@ export async function registerRoutes(
           let preview: string;
 
           if (fmt === "xlsx" && doc.sheets?.length) {
-            fileBuffer = buildXlsxBuffer(doc.sheets);
+            const tplForDoc = findTemplate(doc.name);
+            const tplPath = tplForDoc?.filePath && existsSync(tplForDoc.filePath) ? tplForDoc.filePath : null;
+            fileBuffer = tplPath ? buildXlsxFromTemplate(tplPath, doc.sheets) : buildXlsxBuffer(doc.sheets);
             filename = filename.replace(/\.[^.]+$/, ".xlsx");
             preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
           } else if (fmt === "docx" && doc.content) {
@@ -890,4 +892,41 @@ function buildXlsxBuffer(sheets: Array<{ name: string; headers: string[]; rows: 
     XLSX.utils.book_append_sheet(workbook, ws, sheet.name.slice(0, 31)); // Excel sheet name max 31 chars
   }
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+}
+
+/**
+ * Build an xlsx by merging AI-generated sheet data into the original template workbook.
+ * - Template sheets matched by AI are replaced with AI data rows.
+ * - Template sheets NOT matched by AI are kept exactly as-is (preserves empty/header-only sheets).
+ * - Any extra AI sheets not in the template are appended at the end.
+ */
+function buildXlsxFromTemplate(
+  templatePath: string,
+  aiSheets: Array<{ name: string; headers: string[]; rows: string[][] }>
+): Buffer {
+  const template = XLSX.readFile(templatePath);
+  const out = XLSX.utils.book_new();
+
+  for (const sheetName of template.SheetNames) {
+    const aiSheet = aiSheets.find((s) => s.name.toLowerCase() === sheetName.toLowerCase());
+    if (aiSheet?.rows.length) {
+      // Replace with AI data but keep the sheet in the original position
+      const ws = XLSX.utils.aoa_to_sheet([aiSheet.headers, ...aiSheet.rows]);
+      XLSX.utils.book_append_sheet(out, ws, sheetName.slice(0, 31));
+    } else {
+      // Keep the template sheet as-is (blank sheets, headers, formatting intact)
+      XLSX.utils.book_append_sheet(out, template.Sheets[sheetName], sheetName.slice(0, 31));
+    }
+  }
+
+  // Append any AI sheets that had no matching template sheet
+  for (const aiSheet of aiSheets) {
+    const inTemplate = template.SheetNames.some((s) => s.toLowerCase() === aiSheet.name.toLowerCase());
+    if (!inTemplate) {
+      const ws = XLSX.utils.aoa_to_sheet([aiSheet.headers, ...aiSheet.rows]);
+      XLSX.utils.book_append_sheet(out, ws, aiSheet.name.slice(0, 31));
+    }
+  }
+
+  return XLSX.write(out, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }
