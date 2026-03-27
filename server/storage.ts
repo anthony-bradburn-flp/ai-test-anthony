@@ -47,6 +47,8 @@ export type Template = {
   originalFilename?: string;
   fileSize?: number;
   generateMode?: "ai" | "passthrough";
+  /** Canonical document name used in packages — allows template name to differ from package reference */
+  documentAlias?: string;
 };
 
 export type Package = {
@@ -106,7 +108,7 @@ export interface IStorage {
   updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined>;
   listTemplates(): Promise<Template[]>;
   createTemplate(name: string, type: string): Promise<Template>;
-  updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough" }): Promise<Template | undefined>;
+  updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough"; documentAlias?: string }): Promise<Template | undefined>;
   updateTemplateFile(id: string, filePath: string, originalFilename: string, fileSize: number): Promise<Template | undefined>;
   getTemplate(id: string): Promise<Template | undefined>;
   deleteTemplate(id: string): Promise<void>;
@@ -235,7 +237,7 @@ export class MemStorage implements IStorage {
     return t;
   }
 
-  async updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough" }): Promise<Template | undefined> {
+  async updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough"; documentAlias?: string }): Promise<Template | undefined> {
     const t = this.templates.get(id);
     if (!t) return undefined;
     const updated = { ...t, ...fields, lastUpdated: new Date().toISOString().slice(0, 10) };

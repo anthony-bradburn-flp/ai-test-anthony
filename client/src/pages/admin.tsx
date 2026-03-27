@@ -147,10 +147,12 @@ export default function AdminPage() {
   const [newTplName, setNewTplName] = useState("");
   const [newTplType, setNewTplType] = useState("");
   const [newTplMode, setNewTplMode] = useState<"ai" | "passthrough">("ai");
+  const [newTplAlias, setNewTplAlias] = useState("");
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editTplName, setEditTplName] = useState("");
   const [editTplType, setEditTplType] = useState("");
   const [editTplMode, setEditTplMode] = useState<"ai" | "passthrough">("ai");
+  const [editTplAlias, setEditTplAlias] = useState("");
 
   // Edit User state
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -256,7 +258,7 @@ export default function AdminPage() {
   };
 
   // Template API
-  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number; generateMode?: "ai" | "passthrough" };
+  type ApiTemplate = { id: string; name: string; type: string; lastUpdated: string; originalFilename?: string; fileSize?: number; generateMode?: "ai" | "passthrough"; documentAlias?: string };
 
   const { data: templatesData, isLoading: templatesLoading } = useQuery<ApiTemplate[]>({
     queryKey: ["/api/admin/templates"],
@@ -268,19 +270,19 @@ export default function AdminPage() {
   });
 
   const createTemplateMutation = useMutation({
-    mutationFn: async (data: { name: string; type: string; generateMode: "ai" | "passthrough" }) => {
+    mutationFn: async (data: { name: string; type: string; generateMode: "ai" | "passthrough"; documentAlias?: string }) => {
       const res = await fetch("/api/admin/templates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error("Failed to create template");
-      // PATCH immediately to set generateMode (POST only sets name/type)
+      // PATCH immediately to set generateMode + documentAlias (POST only sets name/type)
       const created = await res.json();
       await fetch(`/api/admin/templates/${created.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ generateMode: data.generateMode }),
+        body: JSON.stringify({ generateMode: data.generateMode, documentAlias: data.documentAlias ?? "" }),
       });
       return created;
     },
@@ -296,11 +298,11 @@ export default function AdminPage() {
   });
 
   const updateTemplateMutation = useMutation({
-    mutationFn: async (data: { id: string; name: string; type: string; generateMode: "ai" | "passthrough" }) => {
+    mutationFn: async (data: { id: string; name: string; type: string; generateMode: "ai" | "passthrough"; documentAlias?: string }) => {
       const res = await fetch(`/api/admin/templates/${data.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: data.name, type: data.type, generateMode: data.generateMode }),
+        body: JSON.stringify({ name: data.name, type: data.type, generateMode: data.generateMode, documentAlias: data.documentAlias ?? "" }),
       });
       if (!res.ok) throw new Error("Failed to update template");
       return res.json();
@@ -379,13 +381,13 @@ export default function AdminPage() {
   const handleCreateTemplate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTplName.trim() || !newTplType.trim()) return;
-    createTemplateMutation.mutate({ name: newTplName.trim(), type: newTplType.trim(), generateMode: newTplMode });
+    createTemplateMutation.mutate({ name: newTplName.trim(), type: newTplType.trim(), generateMode: newTplMode, documentAlias: newTplAlias.trim() || undefined });
   };
 
   const handleEditTemplate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingTemplateId || !editTplName.trim() || !editTplType.trim()) return;
-    updateTemplateMutation.mutate({ id: editingTemplateId, name: editTplName.trim(), type: editTplType.trim(), generateMode: editTplMode });
+    updateTemplateMutation.mutate({ id: editingTemplateId, name: editTplName.trim(), type: editTplType.trim(), generateMode: editTplMode, documentAlias: editTplAlias.trim() || undefined });
   };
 
   // Package API
@@ -809,6 +811,11 @@ export default function AdminPage() {
                     </div>
                   </div>
                   <div className="space-y-1.5">
+                    <Label htmlFor="new-tpl-alias">Used For (package document name)</Label>
+                    <Input id="new-tpl-alias" value={newTplAlias} onChange={(e) => setNewTplAlias(e.target.value)} placeholder="Leave blank if template name matches package exactly" />
+                    <p className="text-xs text-muted-foreground">If this template is referenced in a package by a different name, enter that name here (e.g. "RACI Matrix Template" for a template named "RACI").</p>
+                  </div>
+                  <div className="space-y-1.5">
                     <Label>Generation Mode</Label>
                     <RadioGroup value={newTplMode} onValueChange={(v) => setNewTplMode(v as "ai" | "passthrough")} className="flex gap-4">
                       <div className="flex items-center gap-2">
@@ -858,6 +865,11 @@ export default function AdminPage() {
                                 </div>
                               </div>
                               <div className="space-y-1.5">
+                                <Label htmlFor="edit-tpl-alias">Used For (package document name)</Label>
+                                <Input id="edit-tpl-alias" value={editTplAlias} onChange={(e) => setEditTplAlias(e.target.value)} placeholder="Leave blank if name matches package exactly" />
+                                <p className="text-xs text-muted-foreground">If the package references this template by a different name, enter that name here (e.g. "RACI Matrix Template" for a template named "RACI").</p>
+                              </div>
+                              <div className="space-y-1.5">
                                 <Label>Generation Mode</Label>
                                 <RadioGroup value={editTplMode} onValueChange={(v) => setEditTplMode(v as "ai" | "passthrough")} className="flex gap-4">
                                   <div className="flex items-center gap-2">
@@ -891,6 +903,9 @@ export default function AdminPage() {
                               {tpl.generateMode === "passthrough" ? "Pass-through" : "AI Generate"}
                             </Badge>
                           </div>
+                          {tpl.documentAlias && (
+                            <p className="text-xs text-muted-foreground mt-0.5 ml-6">Used for: <span className="font-medium">{tpl.documentAlias}</span></p>
+                          )}
                           {tpl.originalFilename && (
                             <p className="text-xs text-emerald-600 mt-0.5 ml-6">
                               ✓ {tpl.originalFilename} {tpl.fileSize ? `(${Math.round(tpl.fileSize / 1024)} KB)` : ""}
@@ -911,7 +926,7 @@ export default function AdminPage() {
                               {tpl.originalFilename ? "Replace" : "Upload"}
                             </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"
-                              onClick={() => { setEditingTemplateId(tpl.id); setEditTplName(tpl.name); setEditTplType(tpl.type); setEditTplMode(tpl.generateMode ?? "ai"); setShowAddTemplate(false); }}>
+                              onClick={() => { setEditingTemplateId(tpl.id); setEditTplName(tpl.name); setEditTplType(tpl.type); setEditTplMode(tpl.generateMode ?? "ai"); setEditTplAlias(tpl.documentAlias ?? ""); setShowAddTemplate(false); }}>
                               <Edit2 className="h-4 w-4" />
                             </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"

@@ -354,11 +354,13 @@ export async function registerRoutes(
   });
 
   app.patch("/api/admin/templates/:id", requireAdmin, async (req, res) => {
-    const { name, type, generateMode } = req.body;
+    const { name, type, generateMode, documentAlias } = req.body;
     const updated = await storage.updateTemplate(req.params.id, {
       ...(name ? { name: name.trim() } : {}),
       ...(type ? { type: type.trim() } : {}),
       ...(generateMode !== undefined ? { generateMode } : {}),
+      // documentAlias: empty string clears it, undefined means unchanged
+      ...(documentAlias !== undefined ? { documentAlias: documentAlias.trim() || undefined } : {}),
     });
     if (!updated) { res.status(404).json({ error: "Template not found" }); return; }
     res.json(updated);
@@ -408,12 +410,18 @@ export async function registerRoutes(
   // Actual AI API calls are wired up once API keys are configured.
 
   app.post("/api/generate", requireAuth, generateRateLimit, (req, res, next) => {
+    // Absorb write-after-end errors so a timed-out socket doesn't crash the process
+    res.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "ERR_STREAM_WRITE_AFTER_END") console.error("[generate] response stream error:", err);
+    });
     res.setTimeout(180_000, () => {
-      if (!res.headersSent) {
-        res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
-      } else {
-        res.write(JSON.stringify({ type: "error", error: "Generation timed out after 3 minutes." }) + "\n");
-        res.end();
+      if (!res.writableEnded) {
+        if (!res.headersSent) {
+          res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
+        } else {
+          try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 3 minutes." }) + "\n"); } catch { /* ignore */ }
+          res.end();
+        }
       }
     });
     next();
@@ -462,16 +470,31 @@ export async function registerRoutes(
         })(),
       ]);
 
+      // Find a template by document name — checks both the template's own name and its documentAlias
+      const findTemplate = (docName: string) =>
+        allTemplates.find((t) => t.name === docName || t.documentAlias === docName);
+
       // Auto-include documents from the matching package for this project type
       const pkg = allPackages.find((p) => p.type === projectData.projectType);
       const packageDocNames: string[] = pkg?.documents ?? [];
 
-      // Merge: package docs first (auto-included), then any additionally selected docs
-      const allDocNames = Array.from(new Set([...packageDocNames, ...projectData.docsRequired]));
+      // Merge: package docs first (auto-included), then any additionally selected docs.
+      // Deduplicate by resolved template ID so a package entry "RACI Matrix Template" and
+      // a form entry "RACI" that both map to the same template don't produce two documents.
+      const seenTemplateIds = new Set<string>();
+      const allDocNames: string[] = [];
+      for (const docName of [...packageDocNames, ...projectData.docsRequired]) {
+        const tpl = findTemplate(docName);
+        const dedupeKey = tpl ? tpl.id : docName;
+        if (!seenTemplateIds.has(dedupeKey)) {
+          seenTemplateIds.add(dedupeKey);
+          allDocNames.push(docName);
+        }
+      }
 
       // Split docs into passthrough (template file served as-is) vs AI-generated
       const isPassthrough = (docName: string) => {
-        const tpl = allTemplates.find((t) => t.name === docName);
+        const tpl = findTemplate(docName);
         return !!(tpl?.filePath && existsSync(tpl.filePath) && tpl.generateMode === "passthrough");
       };
       const passthroughDocNames = allDocNames.filter(isPassthrough);
@@ -482,7 +505,7 @@ export async function registerRoutes(
       const MAX_TEMPLATE_CHARS = 4000;
       const templateContents = (await Promise.all(
         aiDocNames.map(async (docName) => {
-          const tpl = allTemplates.find((t) => t.name === docName);
+          const tpl = findTemplate(docName);
           if (!tpl?.filePath || !existsSync(tpl.filePath)) return null;
           let content = await extractFileContent(tpl.filePath, tpl.originalFilename ?? "");
           if (content.length > MAX_TEMPLATE_CHARS) content = content.slice(0, MAX_TEMPLATE_CHARS) + "\n[...template truncated for brevity — follow this structure]";
@@ -497,7 +520,7 @@ export async function registerRoutes(
 
       // Stream passthrough docs immediately — no AI needed, just serve the template file
       for (const docName of passthroughDocNames) {
-        const tpl = allTemplates.find((t) => t.name === docName)!;
+        const tpl = findTemplate(docName)!;
         const fileBuffer = readFileSync(tpl.filePath!);
         const ext = extname(tpl.originalFilename ?? "").toLowerCase();
         const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
