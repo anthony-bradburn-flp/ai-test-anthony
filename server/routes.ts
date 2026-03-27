@@ -504,7 +504,8 @@ export async function registerRoutes(
 
         // Log approximate prompt size to help diagnose slow generation
         const promptChars = systemPrompt.length + userPrompt.length;
-        console.log(`[generate] prompt ~${Math.round(promptChars / 4)} tokens (${Math.round(promptChars / 1024)} KB) | training=${!!settings.trainingDocContent} | templates=${templateContents.length} | supportingDocs=${supportingDocs.length}`);
+        console.log(`[generate] prompt ~${Math.round(promptChars / 4)} tokens (${Math.round(promptChars / 1024)} KB) | training=${!!settings.trainingDocContent} | templates=${templateContents.length} | supportingDocs=${supportingDocs.length} | aiDocs=${aiDocNames.length}`);
+        console.log(`[generate] calling ${settings.provider} API…`);
 
         let aiContent: string;
         if (settings.provider === "anthropic") {
@@ -520,7 +521,7 @@ export async function registerRoutes(
           const client = new OpenAI({ apiKey: getOpenAIKey(), ...(settings.orgId ? { organization: settings.orgId } : {}) });
           const completion = await client.chat.completions.create({
             model: "gpt-5.2",
-            max_completion_tokens: 8192,
+            max_completion_tokens: 16384,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: userPrompt },
@@ -529,6 +530,7 @@ export async function registerRoutes(
           aiContent = completion.choices[0]?.message?.content ?? "";
         }
 
+        console.log(`[generate] AI responded | contentLen=${aiContent.length} | finish=${settings.provider === "openai" ? "see above" : "n/a"}`);
         const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
         type AiDoc = { name: string; filename: string; format?: string; content?: string; sheets?: Array<{ name: string; headers: string[]; rows: string[][] }> };
         let parsedAiDocs: AiDoc[] = [];
