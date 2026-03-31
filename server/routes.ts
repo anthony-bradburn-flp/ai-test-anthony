@@ -564,53 +564,99 @@ export async function registerRoutes(
         send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
       }
 
-      // For placeholder templates, call AI to generate table/loop array data
-      // (scalar fields like {client} come from the form; loop arrays like {#risks} need AI)
-      let aiArrays: Record<string, unknown[]> = { actions: [], risks: [], assumptions: [], decisions: [], comms: [] };
-      if (placeholderDocNames.length > 0) {
-        try {
-          console.log("[generate] calling AI for placeholder array data…");
-          const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
-          let arrayJson = "";
-          if (settings.provider === "anthropic") {
-            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
-            const msg = await ac.messages.create({
-              model: "claude-sonnet-4-6",
-              max_tokens: 4096,
-              system: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text.",
-              messages: [{ role: "user", content: arrayPrompt }],
-            });
-            arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
-          } else {
-            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
-            const comp = await oc.chat.completions.create({
-              model: "gpt-5.2",
-              max_completion_tokens: 4096,
-              messages: [
-                { role: "system", content: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text." },
-                { role: "user", content: arrayPrompt },
-              ],
-            });
-            arrayJson = comp.choices[0]?.message?.content ?? "{}";
-          }
-          // Strip any accidental code fences the model may have added
-          const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
-          const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
-          if (j0 >= 0 && j1 > j0) {
-            const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
-            if (Array.isArray(parsed.actions))     aiArrays.actions     = parsed.actions;
-            if (Array.isArray(parsed.risks))       aiArrays.risks       = parsed.risks;
-            if (Array.isArray(parsed.assumptions)) aiArrays.assumptions = parsed.assumptions;
-            if (Array.isArray(parsed.decisions))   aiArrays.decisions   = parsed.decisions;
-            if (Array.isArray(parsed.comms))       aiArrays.comms       = parsed.comms;
-          }
-          console.log(`[generate] placeholder arrays: actions=${aiArrays.actions.length} risks=${aiArrays.risks.length} assumptions=${aiArrays.assumptions.length} decisions=${aiArrays.decisions.length} comms=${aiArrays.comms.length}`);
-        } catch (err) {
-          console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
-        }
+      // Build prompts now so the main AI call can start at the same time as the placeholder call
+      const systemPrompt = aiDocNames.length > 0
+        ? buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs)
+        : "";
+      const userPrompt = aiDocNames.length > 0
+        ? buildUserPrompt({ ...projectData, docsRequired: aiDocNames })
+        : "";
+      if (aiDocNames.length > 0) {
+        const promptChars = systemPrompt.length + userPrompt.length;
+        console.log(`[generate] prompt ~${Math.round(promptChars / 4)} tokens (${Math.round(promptChars / 1024)} KB) | training=${!!settings.trainingDocContent} | templates=${templateContents.length} | supportingDocs=${supportingDocs.length} | aiDocs=${aiDocNames.length}`);
       }
 
-      // Stream placeholder docs — fill {tags} in the template file with form data + AI arrays
+      // Fire both AI calls in parallel — they are fully independent
+      const placeholderAiPromise: Promise<Record<string, unknown[]>> = placeholderDocNames.length > 0
+        ? (async () => {
+            const empty = { actions: [] as unknown[], risks: [] as unknown[], assumptions: [] as unknown[], decisions: [] as unknown[], comms: [] as unknown[] };
+            try {
+              console.log("[generate] calling AI for placeholder array data…");
+              const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
+              let arrayJson = "";
+              if (settings.provider === "anthropic") {
+                const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
+                const msg = await ac.messages.create({
+                  model: "claude-sonnet-4-6",
+                  max_tokens: 4096,
+                  system: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text.",
+                  messages: [{ role: "user", content: arrayPrompt }],
+                });
+                arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
+              } else {
+                const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+                const comp = await oc.chat.completions.create({
+                  model: "gpt-5.2",
+                  max_completion_tokens: 4096,
+                  messages: [
+                    { role: "system", content: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text." },
+                    { role: "user", content: arrayPrompt },
+                  ],
+                });
+                arrayJson = comp.choices[0]?.message?.content ?? "{}";
+              }
+              const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
+              const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
+              if (j0 >= 0 && j1 > j0) {
+                const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
+                if (Array.isArray(parsed.actions))     empty.actions     = parsed.actions;
+                if (Array.isArray(parsed.risks))       empty.risks       = parsed.risks;
+                if (Array.isArray(parsed.assumptions)) empty.assumptions = parsed.assumptions;
+                if (Array.isArray(parsed.decisions))   empty.decisions   = parsed.decisions;
+                if (Array.isArray(parsed.comms))       empty.comms       = parsed.comms;
+              }
+              console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length}`);
+            } catch (err) {
+              console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
+            }
+            return empty;
+          })()
+        : Promise.resolve({ actions: [] as unknown[], risks: [] as unknown[], assumptions: [] as unknown[], decisions: [] as unknown[], comms: [] as unknown[] });
+
+      const mainAiPromise: Promise<string> = aiDocNames.length > 0
+        ? (async () => {
+            console.log(`[generate] calling ${settings.provider} API…`);
+            try {
+              if (settings.provider === "anthropic") {
+                const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000 });
+                const message = await client.messages.create({
+                  model: "claude-sonnet-4-6",
+                  max_tokens: 8192,
+                  system: systemPrompt,
+                  messages: [{ role: "user", content: userPrompt }],
+                });
+                return message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
+              } else {
+                const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+                const completion = await client.chat.completions.create({
+                  model: "gpt-5.2",
+                  max_completion_tokens: 16384,
+                  messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt },
+                  ],
+                });
+                return completion.choices[0]?.message?.content ?? "";
+              }
+            } catch (err) {
+              console.error("[generate] main AI call failed:", err);
+              return "";
+            }
+          })()
+        : Promise.resolve("");
+
+      // Await placeholder AI result, fill templates, stream docs
+      const aiArrays = await placeholderAiPromise;
       const placeholderData = buildPlaceholderData(projectData, aiArrays);
       for (const docName of placeholderDocNames) {
         const tpl = findTemplate(docName)!;
@@ -634,40 +680,10 @@ export async function registerRoutes(
         }
       }
 
-      // AI-generate the remaining docs
+      // Await main AI result (RACI etc.) and stream docs
       if (aiDocNames.length > 0) {
-        const systemPrompt = buildSystemPrompt(settings.systemPrompt, settings.companyName, settings.trainingDocContent, templateContents, supportingDocs);
-        const userPrompt = buildUserPrompt({ ...projectData, docsRequired: aiDocNames });
-
-        // Log approximate prompt size to help diagnose slow generation
-        const promptChars = systemPrompt.length + userPrompt.length;
-        console.log(`[generate] prompt ~${Math.round(promptChars / 4)} tokens (${Math.round(promptChars / 1024)} KB) | training=${!!settings.trainingDocContent} | templates=${templateContents.length} | supportingDocs=${supportingDocs.length} | aiDocs=${aiDocNames.length}`);
-        console.log(`[generate] calling ${settings.provider} API…`);
-
-        let aiContent: string;
-        if (settings.provider === "anthropic") {
-          const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000 });
-          const message = await client.messages.create({
-            model: "claude-sonnet-4-6",
-            max_tokens: 8192,
-            system: systemPrompt,
-            messages: [{ role: "user", content: userPrompt }],
-          });
-          aiContent = message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
-        } else {
-          const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
-          const completion = await client.chat.completions.create({
-            model: "gpt-5.2",
-            max_completion_tokens: 16384,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-          });
-          aiContent = completion.choices[0]?.message?.content ?? "";
-        }
-
-        console.log(`[generate] AI responded | contentLen=${aiContent.length} | finish=${settings.provider === "openai" ? "see above" : "n/a"}`);
+        const aiContent = await mainAiPromise;
+        console.log(`[generate] AI responded | contentLen=${aiContent.length}`);
         const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)```/) ?? aiContent.match(/(\{[\s\S]*\})/);
         type AiDoc = { name: string; filename: string; format?: string; content?: string; sheets?: Array<{ name: string; headers: string[]; rows: string[][] }> };
         let parsedAiDocs: AiDoc[] = [];
