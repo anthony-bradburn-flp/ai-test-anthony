@@ -638,7 +638,7 @@ export async function registerRoutes(
             if (Array.isArray(parsed.decisions))    empty.decisions    = parsed.decisions;
             if (Array.isArray(parsed.comms))        empty.comms        = parsed.comms;
             if (Array.isArray(parsed.raci))         empty.raci         = parsed.raci;
-            if (Array.isArray(parsed.exec_summary)) empty.exec_summary = parsed.exec_summary.map(String);
+            if (Array.isArray(parsed.exec_summary)) empty.exec_summary = parsed.exec_summary.map((s: unknown) => ({ paragraph: String(s) })) as unknown as string[];
           }
           console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length} raci=${empty.raci.length} exec_summary_paragraphs=${empty.exec_summary.length}`);
         } catch (err) {
@@ -900,6 +900,7 @@ function buildPlaceholderData(projectData: GenerateRequest, aiArrays: Record<str
     decisions:   aiArrays.decisions   ?? [],
     comms:       aiArrays.comms       ?? [],
     raci:        aiArrays.raci        ?? [],
+    exec_summary: aiArrays.exec_summary ?? [],
   };
 }
 
