@@ -583,10 +583,12 @@ export async function registerRoutes(
       }
 
       // Fire both AI calls in parallel — they are fully independent
-      // placeholderAiPromise always fires (exec summary needs its data even when no placeholder docs are selected)
+      // placeholderAiPromise fires when placeholder docs are selected OR exec summary template exists
       type PlaceholderArrays = { actions: unknown[]; risks: unknown[]; assumptions: unknown[]; decisions: unknown[]; comms: unknown[]; exec_summary: string[] };
-      const placeholderAiPromise: Promise<PlaceholderArrays> = (async () => {
-        const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], exec_summary: [] };
+      const needsPlaceholderCall = placeholderDocNames.length > 0 || execSummaryCount > 0;
+      const placeholderAiPromise: Promise<PlaceholderArrays> = needsPlaceholderCall
+        ? (async () => {
+            const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], exec_summary: [] };
         try {
           console.log("[generate] calling AI for placeholder array data…");
           const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
@@ -628,7 +630,8 @@ export async function registerRoutes(
           console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
         }
         return empty;
-      })();
+      })()
+        : Promise.resolve({ actions: [] as unknown[], risks: [] as unknown[], assumptions: [] as unknown[], decisions: [] as unknown[], comms: [] as unknown[], exec_summary: [] as string[] });
 
       const mainAiPromise: Promise<string> = aiDocNames.length > 0
         ? (async () => {
