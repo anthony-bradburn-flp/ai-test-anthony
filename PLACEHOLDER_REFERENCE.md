@@ -173,7 +173,7 @@ Place the loop on a paragraph where each item should become its own Word paragra
 
 | Placeholder | Value |
 |---|---|
-| `{#exec_summary}{.}{/exec_summary}` | 3-paragraph AI summary (context, risks, next steps) |
+| `{#exec_summary}{paragraph}{/exec_summary}` | 3-paragraph AI summary (context, risks, next steps) |
 
 ### Flipside Team table
 | Name | Role |
