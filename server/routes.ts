@@ -736,10 +736,11 @@ export async function registerRoutes(
 
       // Generate executive summary last — always appended to every run if template exists
       if (execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath)) {
+        const ext = extname(execSummaryTpl.originalFilename ?? "").toLowerCase();
+        const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+        const safeName = "Executive_Summary";
+        const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
         try {
-          const ext = extname(execSummaryTpl.originalFilename ?? "").toLowerCase();
-          const safeName = "Executive_Summary";
-          const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
           const execData = { ...placeholderData, exec_summary: aiArrays.exec_summary };
           let fileBuffer: Buffer;
           if (ext === ".docx") {
@@ -749,10 +750,11 @@ export async function registerRoutes(
           } else {
             fileBuffer = readFileSync(execSummaryTpl.filePath);
           }
-          const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
           send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: fileBuffer.toString("base64"), preview: "[Executive Summary generated]" } });
         } catch (err) {
-          console.error("[generate] executive summary fill failed:", err);
+          console.error("[generate] executive summary fill failed — sending unfilled template:", err);
+          // Always send a document event so the client count stays consistent
+          send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: readFileSync(execSummaryTpl.filePath).toString("base64"), preview: "[Executive Summary fill failed — template included as-is]" } });
         }
       }
 
