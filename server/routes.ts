@@ -550,8 +550,14 @@ export async function registerRoutes(
         })
       )).filter(Boolean) as Array<{ name: string; content: string; format: string }>;
 
-      // Tell the client the total number of documents (passthrough + AI)
-      send({ type: "start", count: allDocNames.length, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
+      // Find exec summary template — always generated at the end of every run
+      const execSummaryTpl = allTemplates.find(
+        (t) => /executive.?summary/i.test(t.name) || /executive.?summary/i.test(t.documentAlias ?? "")
+      );
+
+      // Tell the client the total number of documents (passthrough + AI + exec summary if template exists)
+      const execSummaryCount = execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath) ? 1 : 0;
+      send({ type: "start", count: allDocNames.length + execSummaryCount, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
 
       // Stream passthrough docs immediately — no AI needed, just serve the template file
       for (const docName of passthroughDocNames) {
@@ -577,51 +583,52 @@ export async function registerRoutes(
       }
 
       // Fire both AI calls in parallel — they are fully independent
-      const placeholderAiPromise: Promise<Record<string, unknown[]>> = placeholderDocNames.length > 0
-        ? (async () => {
-            const empty = { actions: [] as unknown[], risks: [] as unknown[], assumptions: [] as unknown[], decisions: [] as unknown[], comms: [] as unknown[] };
-            try {
-              console.log("[generate] calling AI for placeholder array data…");
-              const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
-              let arrayJson = "";
-              if (settings.provider === "anthropic") {
-                const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
-                const msg = await ac.messages.create({
-                  model: "claude-sonnet-4-6",
-                  max_tokens: 4096,
-                  system: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text.",
-                  messages: [{ role: "user", content: arrayPrompt }],
-                });
-                arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
-              } else {
-                const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
-                const comp = await oc.chat.completions.create({
-                  model: "gpt-5.2",
-                  max_completion_tokens: 4096,
-                  messages: [
-                    { role: "system", content: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text." },
-                    { role: "user", content: arrayPrompt },
-                  ],
-                });
-                arrayJson = comp.choices[0]?.message?.content ?? "{}";
-              }
-              const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
-              const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
-              if (j0 >= 0 && j1 > j0) {
-                const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
-                if (Array.isArray(parsed.actions))     empty.actions     = parsed.actions;
-                if (Array.isArray(parsed.risks))       empty.risks       = parsed.risks;
-                if (Array.isArray(parsed.assumptions)) empty.assumptions = parsed.assumptions;
-                if (Array.isArray(parsed.decisions))   empty.decisions   = parsed.decisions;
-                if (Array.isArray(parsed.comms))       empty.comms       = parsed.comms;
-              }
-              console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length}`);
-            } catch (err) {
-              console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
-            }
-            return empty;
-          })()
-        : Promise.resolve({ actions: [] as unknown[], risks: [] as unknown[], assumptions: [] as unknown[], decisions: [] as unknown[], comms: [] as unknown[] });
+      // placeholderAiPromise always fires (exec summary needs its data even when no placeholder docs are selected)
+      type PlaceholderArrays = { actions: unknown[]; risks: unknown[]; assumptions: unknown[]; decisions: unknown[]; comms: unknown[]; exec_summary: string[] };
+      const placeholderAiPromise: Promise<PlaceholderArrays> = (async () => {
+        const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], exec_summary: [] };
+        try {
+          console.log("[generate] calling AI for placeholder array data…");
+          const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
+          let arrayJson = "";
+          if (settings.provider === "anthropic") {
+            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
+            const msg = await ac.messages.create({
+              model: "claude-sonnet-4-6",
+              max_tokens: 4096,
+              system: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text.",
+              messages: [{ role: "user", content: arrayPrompt }],
+            });
+            arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
+          } else {
+            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+            const comp = await oc.chat.completions.create({
+              model: "gpt-5.2",
+              max_completion_tokens: 4096,
+              messages: [
+                { role: "system", content: "You are a project management assistant. Return ONLY valid JSON — no markdown, no code fences, no extra text." },
+                { role: "user", content: arrayPrompt },
+              ],
+            });
+            arrayJson = comp.choices[0]?.message?.content ?? "{}";
+          }
+          const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
+          const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
+          if (j0 >= 0 && j1 > j0) {
+            const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
+            if (Array.isArray(parsed.actions))     empty.actions     = parsed.actions;
+            if (Array.isArray(parsed.risks))       empty.risks       = parsed.risks;
+            if (Array.isArray(parsed.assumptions)) empty.assumptions = parsed.assumptions;
+            if (Array.isArray(parsed.decisions))   empty.decisions   = parsed.decisions;
+            if (Array.isArray(parsed.comms))       empty.comms       = parsed.comms;
+            if (Array.isArray(parsed.exec_summary)) empty.exec_summary = parsed.exec_summary.map(String);
+          }
+          console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length} exec_summary_paragraphs=${empty.exec_summary.length}`);
+        } catch (err) {
+          console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
+        }
+        return empty;
+      })();
 
       const mainAiPromise: Promise<string> = aiDocNames.length > 0
         ? (async () => {
@@ -724,7 +731,29 @@ export async function registerRoutes(
         }));
       }
 
-      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
+      // Generate executive summary last — always appended to every run if template exists
+      if (execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath)) {
+        try {
+          const ext = extname(execSummaryTpl.originalFilename ?? "").toLowerCase();
+          const safeName = "Executive_Summary";
+          const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
+          const execData = { ...placeholderData, exec_summary: aiArrays.exec_summary };
+          let fileBuffer: Buffer;
+          if (ext === ".docx") {
+            fileBuffer = fillDocxTemplate(execSummaryTpl.filePath, execData);
+          } else if (ext === ".xlsx" || ext === ".xls") {
+            fileBuffer = fillXlsxTemplate(execSummaryTpl.filePath, execData);
+          } else {
+            fileBuffer = readFileSync(execSummaryTpl.filePath);
+          }
+          const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
+          send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: fileBuffer.toString("base64"), preview: "[Executive Summary generated]" } });
+        } catch (err) {
+          console.error("[generate] executive summary fill failed:", err);
+        }
+      }
+
+      audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
       send({ type: "done", provider: settings.provider });
       res.end();
     } catch (err: unknown) {
@@ -858,6 +887,7 @@ function buildPlaceholderArrayPrompt(
   projectData: GenerateRequest,
   supportingDocs: Array<{ name: string; content: string }>
 ): string {
+  const sponsor = projectData.clientStakeholders[projectData.sponsorIndex];
   const lines: string[] = [
     "Generate initial project governance content for the following project.",
     "",
@@ -865,14 +895,21 @@ function buildPlaceholderArrayPrompt(
     `Project Type: ${projectData.projectType}`,
     `Client: ${projectData.client}`,
     `Start: ${projectData.startDate}   End: ${projectData.endDate}`,
+    `Value: ${(projectData as Record<string, unknown>).value ?? ""}`,
     `Summary: ${projectData.summary}`,
   ];
 
+  if (sponsor) {
+    lines.push(`Sponsor: ${sponsor.name} (${sponsor.role})`);
+  }
   if (projectData.flipsideStakeholders?.length) {
     lines.push(`Delivery Team: ${projectData.flipsideStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
   }
   if (projectData.clientStakeholders?.length) {
     lines.push(`Client Stakeholders: ${projectData.clientStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+  }
+  if (projectData.billingMilestones?.length) {
+    lines.push(`Billing Milestones: ${projectData.billingMilestones.map((m: Record<string, unknown>) => `${m.stage} ${m.percentage}% by ${m.date}`).join(", ")}`);
   }
 
   if (supportingDocs.length > 0) {
@@ -884,16 +921,18 @@ function buildPlaceholderArrayPrompt(
 
   lines.push(
     "",
-    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with 3-5 realistic items each:",
+    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with 3-5 realistic items each, plus an exec_summary array of 3 paragraph strings:",
     `{`,
     `  "actions": [{"id":1,"description":"","owner":"","due_date":"DD/MM/YYYY","priority":"High","status":"Open"}],`,
     `  "risks": [{"id":1,"category":"","description":"","likelihood":"Medium","impact":"High","rag":"Amber","owner":"","mitigation":"","review_date":"DD/MM/YYYY","status":"Open"}],`,
     `  "assumptions": [{"id":1,"description":"","owner":"","date_logged":"DD/MM/YYYY","status":"Open"}],`,
     `  "decisions": [{"id":1,"decision":"","made_by":"","date":"DD/MM/YYYY","impact":"","status":"Open"}],`,
-    `  "comms": [{"audience":"","message":"","channel":"","frequency":"","owner":"","notes":""}]`,
+    `  "comms": [{"audience":"","message":"","channel":"","frequency":"","owner":"","notes":""}],`,
+    `  "exec_summary": ["Paragraph 1: project purpose and context.", "Paragraph 2: key risks and mitigations.", "Paragraph 3: stakeholders, milestones and next steps."]`,
     `}`,
     "",
-    "Use real values — no placeholder text like 'string' or 'example'. Base content on the project details above."
+    "Use real values — no placeholder text like 'string' or 'example'. Base content on the project details above.",
+    "The exec_summary must be an array of 3 plain-text paragraph strings (no markdown, no bullet points)."
   );
 
   return lines.join("\n");
