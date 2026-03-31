@@ -576,12 +576,17 @@ export async function registerRoutes(
       // Stream passthrough docs immediately — no AI needed, just serve the template file
       for (const docName of passthroughDocNames) {
         const tpl = findTemplate(docName)!;
-        const fileBuffer = readFileSync(tpl.filePath!);
         const ext = extname(tpl.originalFilename ?? "").toLowerCase();
         const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
         const safeName = docName.replace(/[^a-zA-Z0-9 -]/g, "").replace(/\s+/g, "_");
         const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
-        send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
+        try {
+          const fileBuffer = readFileSync(tpl.filePath!);
+          send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
+        } catch (err) {
+          console.error(`[generate] passthrough read failed for ${docName}:`, err);
+          send({ type: "document", document: { name: docName, filename, format: fmt, content: "", preview: `[Passthrough failed — file could not be read]` } });
+        }
       }
 
       // Build prompts now so the main AI call can start at the same time as the placeholder call
@@ -726,26 +731,33 @@ export async function registerRoutes(
         await Promise.all(parsedAiDocs.map(async (doc) => {
           const fmt = doc.format ?? "txt";
           let filename = doc.filename ?? `${doc.name}.txt`;
-          let fileBuffer: Buffer;
-          let preview: string;
+          try {
+            let fileBuffer: Buffer;
+            let preview: string;
 
-          if (fmt === "xlsx" && doc.sheets?.length) {
-            const tplForDoc = findTemplate(doc.name);
-            const tplPath = tplForDoc?.filePath && existsSync(tplForDoc.filePath) ? tplForDoc.filePath : null;
-            fileBuffer = tplPath ? buildXlsxFromTemplate(tplPath, doc.sheets) : buildXlsxBuffer(doc.sheets);
-            filename = filename.replace(/\.[^.]+$/, ".xlsx");
-            preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
-          } else if (fmt === "docx" && doc.content) {
-            fileBuffer = await buildDocxBuffer(doc.content);
-            filename = filename.replace(/\.[^.]+$/, ".docx");
-            preview = doc.content;
-          } else {
-            fileBuffer = Buffer.from(doc.content ?? "", "utf8");
-            filename = filename.replace(/\.[^.]+$/, ".txt");
-            preview = doc.content ?? "";
+            if (fmt === "xlsx" && doc.sheets?.length) {
+              const tplForDoc = findTemplate(doc.name);
+              const tplPath = tplForDoc?.filePath && existsSync(tplForDoc.filePath) ? tplForDoc.filePath : null;
+              fileBuffer = tplPath ? buildXlsxFromTemplate(tplPath, doc.sheets) : buildXlsxBuffer(doc.sheets);
+              filename = filename.replace(/\.[^.]+$/, ".xlsx");
+              preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
+            } else if (fmt === "docx" && doc.content) {
+              fileBuffer = await buildDocxBuffer(doc.content);
+              filename = filename.replace(/\.[^.]+$/, ".docx");
+              preview = doc.content;
+            } else {
+              fileBuffer = Buffer.from(doc.content ?? "", "utf8");
+              filename = filename.replace(/\.[^.]+$/, ".txt");
+              preview = doc.content ?? "";
+            }
+
+            send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
+          } catch (err) {
+            console.error(`[generate] AI doc build failed for ${doc.name}:`, err);
+            // Always send a document event so the client count stays consistent
+            const fallback = Buffer.from(`[Generation failed for ${doc.name}: ${err instanceof Error ? err.message : "unknown error"}]`, "utf8");
+            send({ type: "document", document: { name: doc.name, filename: filename.replace(/\.[^.]+$/, ".txt"), format: "txt", content: fallback.toString("base64"), preview: "" } });
           }
-
-          send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
         }));
       }
 
