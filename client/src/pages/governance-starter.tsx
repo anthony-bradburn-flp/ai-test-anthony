@@ -398,6 +398,7 @@ export default function GovernanceStarterPage() {
       <header className="mx-auto max-w-[1100px] px-[18px] pb-2 pt-7">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
+            <img src="/favicon.svg" alt="Logo" className="mb-3 h-10 w-auto" />
             <h1 className="mb-1.5 text-[26px] font-extrabold tracking-[0.2px] text-foreground">
               Project Intake Form
             </h1>
