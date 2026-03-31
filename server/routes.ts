@@ -1285,38 +1285,109 @@ function buildXlsxBuffer(sheets: Array<{ name: string; headers: string[]; rows: 
 }
 
 /**
- * Build an xlsx by merging AI-generated sheet data into the original template workbook.
- * - Template sheets matched by AI are replaced with AI data rows.
- * - Template sheets NOT matched by AI are kept exactly as-is (preserves empty/header-only sheets).
- * - Any extra AI sheets not in the template are appended at the end.
+ * Build an xlsx by merging AI-generated sheet data into the original template workbook
+ * using PizZip XML patching — preserves xl/styles.xml, column widths, merged cells, etc.
+ *
+ * Per sheet:
+ *  - Row 1 from the template is kept exactly (title / branding row)
+ *  - AI header values are written as row 2, using the style indices from template row 2
+ *  - AI data rows start at row 3, using the style indices from template row 3
+ *  - Template sheets with no matching AI data are kept exactly as-is
  */
 function buildXlsxFromTemplate(
   templatePath: string,
   aiSheets: Array<{ name: string; headers: string[]; rows: string[][] }>
 ): Buffer {
-  const template = XLSX.readFile(templatePath);
-  const out = XLSX.utils.book_new();
+  const raw = readFileSync(templatePath);
+  const zip = new PizZip(raw);
 
-  for (const sheetName of template.SheetNames) {
-    const aiSheet = aiSheets.find((s) => s.name.toLowerCase() === sheetName.toLowerCase());
-    if (aiSheet?.rows.length) {
-      // Replace with AI data but keep the sheet in the original position
-      const ws = XLSX.utils.aoa_to_sheet([aiSheet.headers, ...aiSheet.rows]);
-      XLSX.utils.book_append_sheet(out, ws, sheetName.slice(0, 31));
-    } else {
-      // Keep the template sheet as-is (blank sheets, headers, formatting intact)
-      XLSX.utils.book_append_sheet(out, template.Sheets[sheetName], sheetName.slice(0, 31));
-    }
+  const wbXml   = zip.files["xl/workbook.xml"]?.asText() ?? "";
+  const relsXml = zip.files["xl/_rels/workbook.xml.rels"]?.asText() ?? "";
+
+  // Build relPath -> display name map from workbook.xml + rels
+  const pathToName = new Map<string, string>();
+  for (const sm of wbXml.matchAll(/<sheet\b[^>]*\bname="([^"]*)"[^>]*\br:id="([^"]*)"/g)) {
+    const relMatch = relsXml.match(new RegExp(`Id="${sm[2]}"[^>]*Target="([^"]+)"`));
+    if (relMatch) pathToName.set(relMatch[1], sm[1]);
   }
 
-  // Append any AI sheets that had no matching template sheet
-  for (const aiSheet of aiSheets) {
-    const inTemplate = template.SheetNames.some((s) => s.toLowerCase() === aiSheet.name.toLowerCase());
-    if (!inTemplate) {
-      const ws = XLSX.utils.aoa_to_sheet([aiSheet.headers, ...aiSheet.rows]);
-      XLSX.utils.book_append_sheet(out, ws, aiSheet.name.slice(0, 31));
-    }
+  for (const relPath of xlsxSheetPaths(relsXml)) {
+    const wsPath = `xl/${relPath}`;
+    const wsXml  = zip.files[wsPath]?.asText();
+    if (!wsXml) continue;
+
+    const sheetName = pathToName.get(relPath) ?? "";
+    const aiSheet   = aiSheets.find((s) => s.name.toLowerCase() === sheetName.toLowerCase());
+    if (!aiSheet?.rows.length) continue; // keep template sheet untouched
+
+    zip.file(wsPath, xlsxInjectAiData(wsXml, aiSheet));
   }
 
-  return XLSX.write(out, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  delete (zip.files as Record<string, unknown>)["xl/calcChain.xml"];
+  return zip.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
+}
+
+/**
+ * Replace the data rows in a worksheet with AI-generated rows, preserving
+ * the first template row (title/branding) and copying cell style indices
+ * from template rows 2 and 3 onto the AI header and data rows respectively.
+ */
+function xlsxInjectAiData(
+  wsXml: string,
+  aiSheet: { headers: string[]; rows: string[][] }
+): string {
+  const sdm = wsXml.match(/(<sheetData>)([\s\S]*?)(<\/sheetData>)/);
+  if (!sdm) return wsXml;
+
+  const templateRows = [...sdm[2].matchAll(/<row\b[^>]*>[\s\S]*?<\/row>/g)].map(m => m[0]);
+  if (templateRows.length === 0) return wsXml;
+
+  // Row 1 kept verbatim (title / branding)
+  const titleRow        = templateRows[0];
+  // Style source for the AI header row (template row 2, fallback to row 1)
+  const headerStyleRow  = templateRows[1] ?? templateRows[0];
+  // Style source for AI data rows (template row 3, fallback to row 2)
+  const dataStyleRow    = templateRows[2] ?? templateRows[1] ?? templateRows[0];
+
+  const headerStyles = xlsxExtractColStyles(headerStyleRow, aiSheet.headers.length);
+  const dataStyles   = xlsxExtractColStyles(dataStyleRow,   aiSheet.headers.length);
+
+  const aiHeaderRow  = xlsxBuildRow(2, aiSheet.headers, headerStyles);
+  const aiDataRows   = aiSheet.rows.map((row, i) =>
+    xlsxBuildRow(3 + i, row.map(String), dataStyles)
+  );
+
+  const newData = [titleRow, aiHeaderRow, ...aiDataRows].join("");
+  return wsXml.replace(/(<sheetData>)[\s\S]*?(<\/sheetData>)/, `$1${newData}$2`);
+}
+
+/** Extract per-column style index strings from a row's cell elements, extending to colCount */
+function xlsxExtractColStyles(rowXml: string, colCount: number): string[] {
+  const styles: string[] = [...rowXml.matchAll(/<c([^>]*)>/g)].map(cm => {
+    const m = cm[1].match(/\bs="(\d+)"/);
+    return m ? m[1] : "";
+  });
+  // Pad to colCount using the last known style
+  while (styles.length < colCount) styles.push(styles[styles.length - 1] ?? "");
+  return styles;
+}
+
+/** Build a single <row> with inline-string cells using the provided style indices */
+function xlsxBuildRow(rowNum: number, values: string[], colStyles: string[]): string {
+  const cells = values.map((val, i) => {
+    const col   = xlsxColName(i);
+    const sAttr = colStyles[i] ? ` s="${colStyles[i]}"` : "";
+    return `<c r="${col}${rowNum}"${sAttr} t="inlineStr"><is><t>${xlsxEsc(val)}</t></is></c>`;
+  });
+  return `<row r="${rowNum}" spans="1:${values.length}">${cells.join("")}</row>`;
+}
+
+/** Convert a 0-based column index to an Excel column letter (0→A, 25→Z, 26→AA …) */
+function xlsxColName(index: number): string {
+  let name = "", i = index;
+  do {
+    name = String.fromCharCode(65 + (i % 26)) + name;
+    i = Math.floor(i / 26) - 1;
+  } while (i >= 0);
+  return name;
 }
