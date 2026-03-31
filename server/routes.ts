@@ -584,11 +584,11 @@ export async function registerRoutes(
 
       // Fire both AI calls in parallel — they are fully independent
       // placeholderAiPromise fires when placeholder docs are selected OR exec summary template exists
-      type PlaceholderArrays = { actions: unknown[]; risks: unknown[]; assumptions: unknown[]; decisions: unknown[]; comms: unknown[]; exec_summary: string[] };
+      type PlaceholderArrays = { actions: unknown[]; risks: unknown[]; assumptions: unknown[]; decisions: unknown[]; comms: unknown[]; raci: unknown[]; exec_summary: string[] };
       const needsPlaceholderCall = placeholderDocNames.length > 0 || execSummaryCount > 0;
       const placeholderAiPromise: Promise<PlaceholderArrays> = needsPlaceholderCall
         ? (async () => {
-            const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], exec_summary: [] };
+            const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], raci: [], exec_summary: [] };
         try {
           console.log("[generate] calling AI for placeholder array data…");
           const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
@@ -618,14 +618,15 @@ export async function registerRoutes(
           const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
           if (j0 >= 0 && j1 > j0) {
             const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
-            if (Array.isArray(parsed.actions))     empty.actions     = parsed.actions;
-            if (Array.isArray(parsed.risks))       empty.risks       = parsed.risks;
-            if (Array.isArray(parsed.assumptions)) empty.assumptions = parsed.assumptions;
-            if (Array.isArray(parsed.decisions))   empty.decisions   = parsed.decisions;
-            if (Array.isArray(parsed.comms))       empty.comms       = parsed.comms;
+            if (Array.isArray(parsed.actions))      empty.actions      = parsed.actions;
+            if (Array.isArray(parsed.risks))        empty.risks        = parsed.risks;
+            if (Array.isArray(parsed.assumptions))  empty.assumptions  = parsed.assumptions;
+            if (Array.isArray(parsed.decisions))    empty.decisions    = parsed.decisions;
+            if (Array.isArray(parsed.comms))        empty.comms        = parsed.comms;
+            if (Array.isArray(parsed.raci))         empty.raci         = parsed.raci;
             if (Array.isArray(parsed.exec_summary)) empty.exec_summary = parsed.exec_summary.map(String);
           }
-          console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length} exec_summary_paragraphs=${empty.exec_summary.length}`);
+          console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length} raci=${empty.raci.length} exec_summary_paragraphs=${empty.exec_summary.length}`);
         } catch (err) {
           console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
         }
@@ -884,6 +885,7 @@ function buildPlaceholderData(projectData: GenerateRequest, aiArrays: Record<str
     assumptions: aiArrays.assumptions ?? [],
     decisions:   aiArrays.decisions   ?? [],
     comms:       aiArrays.comms       ?? [],
+    raci:        aiArrays.raci        ?? [],
   };
 }
 
@@ -924,19 +926,26 @@ function buildPlaceholderArrayPrompt(
     }
   }
 
+  const raciNote = projectData.flipsideStakeholders?.length
+    ? `Use team members from the delivery team for RACI assignments: ${projectData.flipsideStakeholders.map((s) => s.name).join(", ")}.`
+    : "Use appropriate role names for RACI assignments.";
+
   lines.push(
     "",
-    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with 3-5 realistic items each, plus an exec_summary array of 3 paragraph strings:",
+    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with realistic items, plus an exec_summary array of 3 paragraph strings:",
     `{`,
     `  "actions": [{"id":1,"description":"","owner":"","due_date":"DD/MM/YYYY","priority":"High","status":"Open"}],`,
     `  "risks": [{"id":1,"category":"","description":"","likelihood":"Medium","impact":"High","rag":"Amber","owner":"","mitigation":"","review_date":"DD/MM/YYYY","status":"Open"}],`,
     `  "assumptions": [{"id":1,"description":"","owner":"","date_logged":"DD/MM/YYYY","status":"Open"}],`,
     `  "decisions": [{"id":1,"decision":"","made_by":"","date":"DD/MM/YYYY","impact":"","status":"Open"}],`,
     `  "comms": [{"audience":"","message":"","channel":"","frequency":"","owner":"","notes":""}],`,
+    `  "raci": [{"deliverable":"","responsible":"","accountable":"","consulted":"","informed":""}],`,
     `  "exec_summary": ["Paragraph 1: project purpose and context.", "Paragraph 2: key risks and mitigations.", "Paragraph 3: stakeholders, milestones and next steps."]`,
     `}`,
     "",
     "Use real values — no placeholder text like 'string' or 'example'. Base content on the project details above.",
+    "actions/risks/assumptions/decisions/comms: 3-5 items each. raci: 8-12 rows covering key project deliverables and phases.",
+    raciNote,
     "The exec_summary must be an array of 3 plain-text paragraph strings (no markdown, no bullet points)."
   );
 
