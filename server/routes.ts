@@ -892,115 +892,169 @@ function fillDocxTemplate(filePath: string, data: Record<string, unknown>): Buff
   return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
 
-/** Fill an .xlsx template — expands same-row {#array}...{/array} loops and replaces scalar {tags}.
+/**
+ * Fill an .xlsx template using PizZip XML patching so that xl/styles.xml and all other
+ * formatting is preserved exactly.  SheetJS is NOT used for writing — only for reading
+ * the file (to locate placeholder rows); the actual output is produced by modifying the
+ * raw OOXML zip in-place.
  *
- * Loop format (from PLACEHOLDER_REFERENCE.md): start tag {#name} and end tag {/name} are on the
- * SAME row as the field tags, e.g. first cell "{#actions}{id}", last cell "{status}{/actions}".
- * Each such row is cloned once per array item; rows without a loop tag get scalar substitution.
+ * Loop format (PLACEHOLDER_REFERENCE.md §2): {#name} and {/name} on the SAME row.
+ * e.g. first cell = "{#actions}{id}", last cell = "{status}{/actions}".
  */
 function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buffer {
-  const workbook = XLSX.readFile(filePath, { cellStyles: true });
+  const raw = readFileSync(filePath);
+  const zip = new PizZip(raw);
 
-  for (const sheetName of workbook.SheetNames) {
-    const ws = workbook.Sheets[sheetName];
-    if (!ws["!ref"]) continue;
-    xlsxFillSheet(ws, data);
+  // Parse shared strings once — used to resolve cell values during loop detection
+  const ssPath = "xl/sharedStrings.xml";
+  const ssXml  = zip.files[ssPath]?.asText() ?? "";
+  const sharedStrings = xlsxParseSharedStrings(ssXml);
+
+  // Process every worksheet
+  const relsXml = zip.files["xl/_rels/workbook.xml.rels"]?.asText() ?? "";
+  for (const relPath of xlsxSheetPaths(relsXml)) {
+    const wsPath = `xl/${relPath}`;
+    const wsXml  = zip.files[wsPath]?.asText();
+    if (!wsXml) continue;
+    zip.file(wsPath, xlsxProcessSheet(wsXml, sharedStrings, data));
   }
 
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellStyles: true }) as Buffer;
+  // Scalar replacement in shared strings — loop-template strings are replaced
+  // inline during row expansion so they don't need to be touched here.
+  // Unknown/array keys are left as-is so loop markers survive until expansion.
+  const newSsXml = ssXml.replace(/\{(\w+)\}/g, (match, key) => {
+    const val = (data as Record<string, unknown>)[key];
+    return val !== undefined && !Array.isArray(val) ? xlsxEsc(String(val)) : match;
+  });
+  zip.file(ssPath, newSsXml);
+
+  // Remove the calc chain — row insertions invalidate formula cell addresses
+  delete (zip.files as Record<string, unknown>)["xl/calcChain.xml"];
+
+  return zip.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
 
-type XCell = XLSX.CellObject | undefined;
+// ---------------------------------------------------------------------------
+// PizZip / OOXML helpers
+// ---------------------------------------------------------------------------
 
-/** Return the loop array name if any cell in the row contains {#name}; else null */
-function xlsxLoopName(row: XCell[]): string | null {
-  for (const cell of row) {
-    if (cell && typeof cell.v === "string") {
-      const m = cell.v.match(/\{#(\w+)\}/);
+function xlsxEsc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Extract plain-text values from every <si> element in sharedStrings.xml */
+function xlsxParseSharedStrings(xml: string): string[] {
+  return [...xml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m =>
+    [...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)]
+      .map(t => t[1])
+      .join("")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+  );
+}
+
+/** Pull worksheet rel-paths (e.g. "worksheets/sheet1.xml") from workbook.xml.rels */
+function xlsxSheetPaths(relsXml: string): string[] {
+  return [...relsXml.matchAll(/Target="(worksheets\/[^"]+)"/g)].map(m => m[1]);
+}
+
+/** Return the shared-string text for a <c> element, or null if not a shared-string cell */
+function xlsxCellText(cellXml: string, ss: string[]): string | null {
+  if (!cellXml.includes('t="s"')) return null;
+  const v = cellXml.match(/<v>(\d+)<\/v>/);
+  return v ? (ss[parseInt(v[1])] ?? null) : null;
+}
+
+/** Detect loop name from a row's XML by finding any cell whose shared string has {#name} */
+function xlsxRowLoopName(rowXml: string, ss: string[]): string | null {
+  for (const cm of rowXml.matchAll(/<c[^>]*>[\s\S]*?<\/c>/g)) {
+    const text = xlsxCellText(cm[0], ss);
+    if (text) {
+      const m = text.match(/\{#(\w+)\}/);
       if (m) return m[1];
     }
   }
   return null;
 }
 
-/** Clone a loop-template row for one item, stripping {#name}/{/name} then substituting fields */
-function xlsxExpandRow(row: XCell[], loopName: string, item: Record<string, unknown>): XCell[] {
+/**
+ * Clone a loop-template row for one array item.
+ * Shared-string cells become inline-string (<is><t>…</t></is>) so we don't
+ * have to renumber the shared-strings table; the `s` (style) attribute is
+ * copied verbatim, preserving every cell's formatting.
+ */
+function xlsxExpandRow(
+  rowXml: string,
+  loopName: string,
+  item: Record<string, unknown>,
+  newRowNum: number,
+  ss: string[]
+): string {
   const startRe = new RegExp(`\\{#${loopName}\\}`, "g");
   const endRe   = new RegExp(`\\{/${loopName}\\}`, "g");
-  return row.map(cell => {
-    if (!cell || typeof cell.v !== "string") return cell;
-    let val = cell.v.replace(startRe, "").replace(endRe, "");
-    val = val.replace(/\{(\w+)\}/g, (_, key) => {
-      const v = item[key];
-      return v !== undefined ? String(v) : "";
-    });
-    return { ...cell, v: val, w: val, t: "s" as const };
-  });
-}
 
-/** Substitute scalar {tag} values in a regular (non-loop) row */
-function xlsxSubRow(row: XCell[], data: Record<string, unknown>): XCell[] {
-  return row.map(cell => {
-    if (!cell || typeof cell.v !== "string" || !cell.v.includes("{")) return cell;
-    const filled = cell.v.replace(/\{(\w+)\}/g, (_, key) => {
-      const val = (data as Record<string, unknown>)[key];
-      return val !== undefined && !Array.isArray(val) ? String(val) : "";
-    });
-    return { ...cell, v: filled, w: filled, t: "s" as const };
-  });
-}
+  // Update row number in opening <row …> tag
+  const rowOpen = (rowXml.match(/^<row[^>]*>/) ?? ["<row>"])[0]
+    .replace(/\br="[^"]*"/, `r="${newRowNum}"`);
 
-function xlsxFillSheet(ws: XLSX.WorkSheet, data: Record<string, unknown>): void {
-  const range = XLSX.utils.decode_range(ws["!ref"]!);
-  const numCols = range.e.c - range.s.c + 1;
-
-  // Read all rows into memory as cell-object arrays (copies preserve style refs)
-  const inputRows: XCell[][] = [];
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    const row: XCell[] = [];
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      row.push(ws[XLSX.utils.encode_cell({ r, c })]);
-    }
-    inputRows.push(row);
-  }
-
-  // Process each row: loop rows are expanded, regular rows get scalar substitution
-  const outputRows: XCell[][] = [];
-  for (const row of inputRows) {
-    const loopName = xlsxLoopName(row);
-    if (loopName) {
-      // Same-row loop: replicate this row once per array item
-      const items = Array.isArray(data[loopName])
-        ? (data[loopName] as Record<string, unknown>[])
-        : [];
-      for (const item of items) {
-        outputRows.push(xlsxExpandRow(row, loopName, item));
-      }
-      // Zero items → row is omitted entirely (clean empty table body)
+  let out = rowOpen;
+  for (const cm of rowXml.matchAll(/<c([^>]*)>([\s\S]*?)<\/c>/g)) {
+    const attrs = cm[1];
+    const inner = cm[2];
+    // Update cell address column-letter stays, row number changes
+    const newAttrs = attrs.replace(/\br="([A-Z]+)\d+"/, (_, col) => `r="${col}${newRowNum}"`);
+    const cellText = xlsxCellText(`<c${attrs}>${inner}</c>`, ss);
+    if (cellText !== null) {
+      // Substitute template tags and emit as inline string
+      let val = cellText.replace(startRe, "").replace(endRe, "");
+      val = val.replace(/\{(\w+)\}/g, (_, k) => {
+        const v = item[k]; return v !== undefined ? String(v) : "";
+      });
+      // Keep only the style attribute; switch type to inlineStr
+      const sAttr = (newAttrs.match(/\bs="[^"]*"/) ?? [""])[0];
+      const addr  = (newAttrs.match(/r="[^"]*"/) ?? ["r=\"\""])[0];
+      out += `<c ${addr}${sAttr ? " " + sAttr : ""} t="inlineStr"><is><t>${xlsxEsc(val)}</t></is></c>`;
     } else {
-      outputRows.push(xlsxSubRow(row, data));
+      // Non-string cell (number, formula, etc.) — keep as-is, update address
+      out += `<c${newAttrs}>${inner}</c>`;
     }
   }
+  out += "</row>";
+  return out;
+}
 
-  // Clear existing data cells (keep sheet metadata: !ref, !cols, !merges, etc.)
-  for (const key of Object.keys(ws)) {
-    if (!key.startsWith("!")) delete ws[key];
-  }
+/** Process one worksheet XML: expand loop rows, renumber subsequent rows */
+function xlsxProcessSheet(
+  wsXml: string,
+  ss: string[],
+  data: Record<string, unknown>
+): string {
+  const sdm = wsXml.match(/(<sheetData>)([\s\S]*?)(<\/sheetData>)/);
+  if (!sdm) return wsXml;
 
-  // Write the expanded rows back
-  for (let r = 0; r < outputRows.length; r++) {
-    for (let c = 0; c < numCols && c < outputRows[r].length; c++) {
-      const cell = outputRows[r][c];
-      if (cell !== undefined) {
-        ws[XLSX.utils.encode_cell({ r: range.s.r + r, c: range.s.c + c })] = cell;
+  let extra = 0; // net rows added above current position
+  let outRows = "";
+
+  for (const rm of sdm[2].matchAll(/<row[^>]*>[\s\S]*?<\/row>/g)) {
+    const rowXml  = rm[0];
+    const origNum = parseInt(rowXml.match(/\br="(\d+)"/) ?.[1] ?? "1");
+    const newNum  = origNum + extra;
+    const loop    = xlsxRowLoopName(rowXml, ss);
+
+    if (loop) {
+      const items = Array.isArray(data[loop]) ? (data[loop] as Record<string, unknown>[]) : [];
+      for (let i = 0; i < items.length; i++) {
+        outRows += xlsxExpandRow(rowXml, loop, items[i], newNum + i, ss);
       }
+      extra += items.length - 1; // replaced 1 template row with N data rows
+    } else {
+      // Renumber row and all cell addresses
+      outRows += rowXml
+        .replace(/(<row[^>]*\br=)"[^"]*"/, `$1"${newNum}"`)
+        .replace(/(<c[^>]*\br=")([A-Z]+)\d+(")/g, (_, pre, col, suf) => `${pre}${col}${newNum}${suf}`);
     }
   }
 
-  ws["!ref"] = XLSX.utils.encode_range({
-    s: range.s,
-    e: { r: range.s.r + Math.max(outputRows.length - 1, 0), c: range.e.c },
-  });
+  return wsXml.replace(/(<sheetData>)[\s\S]*?(<\/sheetData>)/, `$1${outRows}$2`);
 }
 
 
