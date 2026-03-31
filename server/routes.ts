@@ -326,10 +326,19 @@ export async function registerRoutes(
 
   app.patch("/api/admin/packages/:id", requireAdmin, async (req, res) => {
     const { type, description, documents } = req.body;
+    // documents may arrive as plain strings or as objects with a 'name' field — normalise either way
+    const extractDocName = (d: unknown): string => {
+      if (typeof d === "string") return d;
+      if (d && typeof d === "object") {
+        const o = d as Record<string, unknown>;
+        if (typeof o.name === "string") return o.name;
+      }
+      return "";
+    };
     const updated = await storage.updatePackage(req.params.id, {
       ...(type ? { type: String(type).trim() } : {}),
       ...(description ? { description: String(description).trim() } : {}),
-      ...(Array.isArray(documents) ? { documents: documents.map(String) } : {}),
+      ...(Array.isArray(documents) ? { documents: documents.map(extractDocName).filter(Boolean) } : {}),
     });
     if (!updated) { res.status(404).json({ error: "Package not found" }); return; }
     res.json(updated);
@@ -555,8 +564,13 @@ export async function registerRoutes(
         (t) => /executive.?summary/i.test(t.name) || /executive.?summary/i.test(t.documentAlias ?? "")
       );
 
-      // Tell the client the total number of documents (passthrough + AI + exec summary if template exists)
-      const execSummaryCount = execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath) ? 1 : 0;
+      // Skip the always-generate block if exec summary is already in the package (avoid duplicates)
+      const execAlreadyInRun = !!execSummaryTpl && placeholderDocNames.some(
+        (n) => findTemplate(n)?.id === execSummaryTpl.id
+      );
+
+      // Tell the client the total number of documents (passthrough + AI + exec summary if not already in run)
+      const execSummaryCount = !execAlreadyInRun && execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath) ? 1 : 0;
       send({ type: "start", count: allDocNames.length + execSummaryCount, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
 
       // Stream passthrough docs immediately — no AI needed, just serve the template file
@@ -735,8 +749,8 @@ export async function registerRoutes(
         }));
       }
 
-      // Generate executive summary last — always appended to every run if template exists
-      if (execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath)) {
+      // Generate executive summary last — skipped if already included via package
+      if (!execAlreadyInRun && execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath)) {
         const ext = extname(execSummaryTpl.originalFilename ?? "").toLowerCase();
         const fmt = ext === ".docx" ? "docx" : (ext === ".xlsx" || ext === ".xls") ? "xlsx" : "txt";
         const safeName = "Executive_Summary";
