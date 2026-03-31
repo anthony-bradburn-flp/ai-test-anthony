@@ -143,6 +143,60 @@ Place `{#flipside_team}` on the first data row, `{/flipside_team}` at the end of
 
 ---
 
+## Executive Summary — `Executive Summary.docx`
+
+> **Always generated** — appended to every document run automatically, regardless of package selection.
+> The AI generates a 3-paragraph narrative (`exec_summary`) covering project context, key risks, and next steps.
+> All shared placeholders and loop arrays are also available.
+
+### Cover / Header section
+```
+{project_name}
+Executive Summary
+Client: {client}          Sheet Ref: {sheet_ref}
+Start: {start_date}       End: {end_date}
+Generated: {generated_date}
+```
+
+### Project Overview
+```
+{summary}
+```
+
+### Sponsor
+```
+Sponsor: {sponsor_name} ({sponsor_role})
+```
+
+### AI-Generated Narrative
+Place the loop on a paragraph where each item should become its own Word paragraph:
+
+| Placeholder | Value |
+|---|---|
+| `{#exec_summary}{.}{/exec_summary}` | 3-paragraph AI summary (context, risks, next steps) |
+
+### Flipside Team table
+| Name | Role |
+|---|---|
+| `{#flipside_team}{name}` | `{role}{/flipside_team}` |
+
+### Client Stakeholders table
+| Name | Role |
+|---|---|
+| `{#client_team}{name}` | `{role}{/client_team}` |
+
+### Billing / Project Milestones table
+| Stage | % | Target Date |
+|---|---|---|
+| `{#milestones}{stage}` | `{percentage}%` | `{date}{/milestones}` |
+
+### Key Risks table
+| ID | Description | Likelihood | Impact | RAG | Owner | Mitigation |
+|---|---|---|---|---|---|---|
+| `{#risks}{id}` | `{description}` | `{likelihood}` | `{impact}` | `{rag}` | `{owner}` | `{mitigation}{/risks}` |
+
+---
+
 ## RACI — `RACI.xlsx`
 
 > **Held — AI generation for now.**
