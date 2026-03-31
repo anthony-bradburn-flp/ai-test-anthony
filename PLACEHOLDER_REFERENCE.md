@@ -199,9 +199,24 @@ Place the loop on a paragraph where each item should become its own Word paragra
 
 ## RACI — `RACI.xlsx`
 
-> **Held — AI generation for now.**
-> RACI columns are dynamic (one per team member) which makes placeholder loops awkward.
-> Will be revisited once other templates are implemented.
+> **Placeholder mode** — uses the same fill pipeline as other placeholder templates.
+> Rows 1–5 contain shared header placeholders. Row 6 is blank. Row 7 is the static header row. Row 8 is the loop row.
+
+### Header rows (1–5) — shared placeholders
+Use any combination of the shared placeholders from the top of this document
+(`{client}`, `{project_name}`, `{sheet_ref}`, `{start_date}`, `{end_date}`, `{sponsor_name}`, etc.)
+
+### RACI table — starts row 7
+| Column | Row 7 (header, static) | Row 8 (loop row) |
+|---|---|---|
+| A | Deliverable / Action | `{#raci}{deliverable}` |
+| B | Responsible | `{responsible}` |
+| C | Accountable | `{accountable}` |
+| D | Consulted | `{consulted}` |
+| E | Informed | `{informed}{/raci}` |
+
+The AI generates 8–12 rows covering key project deliverables and phases.
+Responsible/Accountable/Consulted/Informed values are populated with team member names from the delivery team.
 
 ---
 

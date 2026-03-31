@@ -584,11 +584,11 @@ export async function registerRoutes(
 
       // Fire both AI calls in parallel — they are fully independent
       // placeholderAiPromise fires when placeholder docs are selected OR exec summary template exists
-      type PlaceholderArrays = { actions: unknown[]; risks: unknown[]; assumptions: unknown[]; decisions: unknown[]; comms: unknown[]; exec_summary: string[] };
+      type PlaceholderArrays = { actions: unknown[]; risks: unknown[]; assumptions: unknown[]; decisions: unknown[]; comms: unknown[]; raci: unknown[]; exec_summary: string[] };
       const needsPlaceholderCall = placeholderDocNames.length > 0 || execSummaryCount > 0;
       const placeholderAiPromise: Promise<PlaceholderArrays> = needsPlaceholderCall
         ? (async () => {
-            const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], exec_summary: [] };
+            const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], raci: [], exec_summary: [] };
         try {
           console.log("[generate] calling AI for placeholder array data…");
           const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
@@ -618,14 +618,15 @@ export async function registerRoutes(
           const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
           if (j0 >= 0 && j1 > j0) {
             const parsed = JSON.parse(stripped.slice(j0, j1 + 1));
-            if (Array.isArray(parsed.actions))     empty.actions     = parsed.actions;
-            if (Array.isArray(parsed.risks))       empty.risks       = parsed.risks;
-            if (Array.isArray(parsed.assumptions)) empty.assumptions = parsed.assumptions;
-            if (Array.isArray(parsed.decisions))   empty.decisions   = parsed.decisions;
-            if (Array.isArray(parsed.comms))       empty.comms       = parsed.comms;
+            if (Array.isArray(parsed.actions))      empty.actions      = parsed.actions;
+            if (Array.isArray(parsed.risks))        empty.risks        = parsed.risks;
+            if (Array.isArray(parsed.assumptions))  empty.assumptions  = parsed.assumptions;
+            if (Array.isArray(parsed.decisions))    empty.decisions    = parsed.decisions;
+            if (Array.isArray(parsed.comms))        empty.comms        = parsed.comms;
+            if (Array.isArray(parsed.raci))         empty.raci         = parsed.raci;
             if (Array.isArray(parsed.exec_summary)) empty.exec_summary = parsed.exec_summary.map(String);
           }
-          console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length} exec_summary_paragraphs=${empty.exec_summary.length}`);
+          console.log(`[generate] placeholder arrays: actions=${empty.actions.length} risks=${empty.risks.length} assumptions=${empty.assumptions.length} decisions=${empty.decisions.length} comms=${empty.comms.length} raci=${empty.raci.length} exec_summary_paragraphs=${empty.exec_summary.length}`);
         } catch (err) {
           console.error("[generate] placeholder array AI call failed (templates will have empty tables):", err);
         }
@@ -884,6 +885,7 @@ function buildPlaceholderData(projectData: GenerateRequest, aiArrays: Record<str
     assumptions: aiArrays.assumptions ?? [],
     decisions:   aiArrays.decisions   ?? [],
     comms:       aiArrays.comms       ?? [],
+    raci:        aiArrays.raci        ?? [],
   };
 }
 
@@ -924,19 +926,26 @@ function buildPlaceholderArrayPrompt(
     }
   }
 
+  const raciNote = projectData.flipsideStakeholders?.length
+    ? `Use team members from the delivery team for RACI assignments: ${projectData.flipsideStakeholders.map((s) => s.name).join(", ")}.`
+    : "Use appropriate role names for RACI assignments.";
+
   lines.push(
     "",
-    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with 3-5 realistic items each, plus an exec_summary array of 3 paragraph strings:",
+    "Return ONLY a valid JSON object (no markdown, no code fences) containing these arrays with realistic items, plus an exec_summary array of 3 paragraph strings:",
     `{`,
     `  "actions": [{"id":1,"description":"","owner":"","due_date":"DD/MM/YYYY","priority":"High","status":"Open"}],`,
     `  "risks": [{"id":1,"category":"","description":"","likelihood":"Medium","impact":"High","rag":"Amber","owner":"","mitigation":"","review_date":"DD/MM/YYYY","status":"Open"}],`,
     `  "assumptions": [{"id":1,"description":"","owner":"","date_logged":"DD/MM/YYYY","status":"Open"}],`,
     `  "decisions": [{"id":1,"decision":"","made_by":"","date":"DD/MM/YYYY","impact":"","status":"Open"}],`,
     `  "comms": [{"audience":"","message":"","channel":"","frequency":"","owner":"","notes":""}],`,
+    `  "raci": [{"deliverable":"","responsible":"","accountable":"","consulted":"","informed":""}],`,
     `  "exec_summary": ["Paragraph 1: project purpose and context.", "Paragraph 2: key risks and mitigations.", "Paragraph 3: stakeholders, milestones and next steps."]`,
     `}`,
     "",
     "Use real values — no placeholder text like 'string' or 'example'. Base content on the project details above.",
+    "actions/risks/assumptions/decisions/comms: 3-5 items each. raci: 8-12 rows covering key project deliverables and phases.",
+    raciNote,
     "The exec_summary must be an array of 3 plain-text paragraph strings (no markdown, no bullet points)."
   );
 
@@ -1285,38 +1294,109 @@ function buildXlsxBuffer(sheets: Array<{ name: string; headers: string[]; rows: 
 }
 
 /**
- * Build an xlsx by merging AI-generated sheet data into the original template workbook.
- * - Template sheets matched by AI are replaced with AI data rows.
- * - Template sheets NOT matched by AI are kept exactly as-is (preserves empty/header-only sheets).
- * - Any extra AI sheets not in the template are appended at the end.
+ * Build an xlsx by merging AI-generated sheet data into the original template workbook
+ * using PizZip XML patching — preserves xl/styles.xml, column widths, merged cells, etc.
+ *
+ * Per sheet:
+ *  - Row 1 from the template is kept exactly (title / branding row)
+ *  - AI header values are written as row 2, using the style indices from template row 2
+ *  - AI data rows start at row 3, using the style indices from template row 3
+ *  - Template sheets with no matching AI data are kept exactly as-is
  */
 function buildXlsxFromTemplate(
   templatePath: string,
   aiSheets: Array<{ name: string; headers: string[]; rows: string[][] }>
 ): Buffer {
-  const template = XLSX.readFile(templatePath);
-  const out = XLSX.utils.book_new();
+  const raw = readFileSync(templatePath);
+  const zip = new PizZip(raw);
 
-  for (const sheetName of template.SheetNames) {
-    const aiSheet = aiSheets.find((s) => s.name.toLowerCase() === sheetName.toLowerCase());
-    if (aiSheet?.rows.length) {
-      // Replace with AI data but keep the sheet in the original position
-      const ws = XLSX.utils.aoa_to_sheet([aiSheet.headers, ...aiSheet.rows]);
-      XLSX.utils.book_append_sheet(out, ws, sheetName.slice(0, 31));
-    } else {
-      // Keep the template sheet as-is (blank sheets, headers, formatting intact)
-      XLSX.utils.book_append_sheet(out, template.Sheets[sheetName], sheetName.slice(0, 31));
-    }
+  const wbXml   = zip.files["xl/workbook.xml"]?.asText() ?? "";
+  const relsXml = zip.files["xl/_rels/workbook.xml.rels"]?.asText() ?? "";
+
+  // Build relPath -> display name map from workbook.xml + rels
+  const pathToName = new Map<string, string>();
+  for (const sm of wbXml.matchAll(/<sheet\b[^>]*\bname="([^"]*)"[^>]*\br:id="([^"]*)"/g)) {
+    const relMatch = relsXml.match(new RegExp(`Id="${sm[2]}"[^>]*Target="([^"]+)"`));
+    if (relMatch) pathToName.set(relMatch[1], sm[1]);
   }
 
-  // Append any AI sheets that had no matching template sheet
-  for (const aiSheet of aiSheets) {
-    const inTemplate = template.SheetNames.some((s) => s.toLowerCase() === aiSheet.name.toLowerCase());
-    if (!inTemplate) {
-      const ws = XLSX.utils.aoa_to_sheet([aiSheet.headers, ...aiSheet.rows]);
-      XLSX.utils.book_append_sheet(out, ws, aiSheet.name.slice(0, 31));
-    }
+  for (const relPath of xlsxSheetPaths(relsXml)) {
+    const wsPath = `xl/${relPath}`;
+    const wsXml  = zip.files[wsPath]?.asText();
+    if (!wsXml) continue;
+
+    const sheetName = pathToName.get(relPath) ?? "";
+    const aiSheet   = aiSheets.find((s) => s.name.toLowerCase() === sheetName.toLowerCase());
+    if (!aiSheet?.rows.length) continue; // keep template sheet untouched
+
+    zip.file(wsPath, xlsxInjectAiData(wsXml, aiSheet));
   }
 
-  return XLSX.write(out, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  delete (zip.files as Record<string, unknown>)["xl/calcChain.xml"];
+  return zip.generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
+}
+
+/**
+ * Replace the data rows in a worksheet with AI-generated rows, preserving
+ * the first template row (title/branding) and copying cell style indices
+ * from template rows 2 and 3 onto the AI header and data rows respectively.
+ */
+function xlsxInjectAiData(
+  wsXml: string,
+  aiSheet: { headers: string[]; rows: string[][] }
+): string {
+  const sdm = wsXml.match(/(<sheetData>)([\s\S]*?)(<\/sheetData>)/);
+  if (!sdm) return wsXml;
+
+  const templateRows = [...sdm[2].matchAll(/<row\b[^>]*>[\s\S]*?<\/row>/g)].map(m => m[0]);
+  if (templateRows.length === 0) return wsXml;
+
+  // Row 1 kept verbatim (title / branding)
+  const titleRow        = templateRows[0];
+  // Style source for the AI header row (template row 2, fallback to row 1)
+  const headerStyleRow  = templateRows[1] ?? templateRows[0];
+  // Style source for AI data rows (template row 3, fallback to row 2)
+  const dataStyleRow    = templateRows[2] ?? templateRows[1] ?? templateRows[0];
+
+  const headerStyles = xlsxExtractColStyles(headerStyleRow, aiSheet.headers.length);
+  const dataStyles   = xlsxExtractColStyles(dataStyleRow,   aiSheet.headers.length);
+
+  const aiHeaderRow  = xlsxBuildRow(2, aiSheet.headers, headerStyles);
+  const aiDataRows   = aiSheet.rows.map((row, i) =>
+    xlsxBuildRow(3 + i, row.map(String), dataStyles)
+  );
+
+  const newData = [titleRow, aiHeaderRow, ...aiDataRows].join("");
+  return wsXml.replace(/(<sheetData>)[\s\S]*?(<\/sheetData>)/, `$1${newData}$2`);
+}
+
+/** Extract per-column style index strings from a row's cell elements, extending to colCount */
+function xlsxExtractColStyles(rowXml: string, colCount: number): string[] {
+  const styles: string[] = [...rowXml.matchAll(/<c([^>]*)>/g)].map(cm => {
+    const m = cm[1].match(/\bs="(\d+)"/);
+    return m ? m[1] : "";
+  });
+  // Pad to colCount using the last known style
+  while (styles.length < colCount) styles.push(styles[styles.length - 1] ?? "");
+  return styles;
+}
+
+/** Build a single <row> with inline-string cells using the provided style indices */
+function xlsxBuildRow(rowNum: number, values: string[], colStyles: string[]): string {
+  const cells = values.map((val, i) => {
+    const col   = xlsxColName(i);
+    const sAttr = colStyles[i] ? ` s="${colStyles[i]}"` : "";
+    return `<c r="${col}${rowNum}"${sAttr} t="inlineStr"><is><t>${xlsxEsc(val)}</t></is></c>`;
+  });
+  return `<row r="${rowNum}" spans="1:${values.length}">${cells.join("")}</row>`;
+}
+
+/** Convert a 0-based column index to an Excel column letter (0→A, 25→Z, 26→AA …) */
+function xlsxColName(index: number): string {
+  let name = "", i = index;
+  do {
+    name = String.fromCharCode(65 + (i % 26)) + name;
+    i = Math.floor(i / 26) - 1;
+  } while (i >= 0);
+  return name;
 }
