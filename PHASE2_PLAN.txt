@@ -1,0 +1,248 @@
+PHASE 2: CLIENT & PROJECT MANAGEMENT
+Data Model, Relationships & Implementation Plan
+================================================
+
+
+ENTITY OVERVIEW
+---------------
+
+  Client (1) ---- (N) Project (1) ---- (N) StoredDocument
+                        |
+                        +-- created from: GenerateRequest fields
+                             + linked to: User (created by)
+
+
+NEW ENTITY TYPES
+----------------
+
+Client
+  id          : string   (uuid)
+  name        : string   (display name, used as dropdown label)
+  createdAt   : string   (ISO date)
+  createdBy   : string   (userId)
+
+
+Project
+  id                   : string
+  clientId             : string   (FK -> Client.id)
+  sheetRef             : string
+  projectName          : string
+  projectType          : string
+  projectSize          : string
+  value                : string
+  startDate            : string
+  endDate              : string
+  summary              : string
+  sponsorName          : string   (derived: clientStakeholders[sponsorIndex].name)
+  sponsorRole          : string   (derived: clientStakeholders[sponsorIndex].role)
+  billingMilestones    : { stage: string; percentage: string; date: string }[]
+  flipsideStakeholders : { name: string; role: string }[]
+  clientStakeholders   : { name: string; role: string }[]
+  createdAt            : string
+  createdBy            : string   (userId)
+  lastGeneratedAt      : string   (optional)
+
+
+StoredDocument
+  id           : string
+  projectId    : string   (FK -> Project.id)
+  filename     : string   (original template name e.g. "RAID Log.xlsx")
+  storagePath  : string   (relative: "documents/{projectId}/{id}.xlsx")
+  mimeType     : string
+  fileSize     : number
+  generatedAt  : string
+  generatedBy  : string   (userId)
+  packageId    : string   (optional - which package triggered this generation)
+
+
+STORE.JSON STRUCTURE (EXTENDED)
+--------------------------------
+
+  {
+    "users":     [...],
+    "templates": [...],
+    "packages":  [...],
+    "aiSettings": {...},
+    "clients":   [...],    <-- NEW
+    "projects":  [...],    <-- NEW
+    "documents": [...]     <-- NEW (metadata only)
+  }
+
+  Document files live at:  data/documents/{projectId}/{documentId}{.ext}
+
+
+RELATIONSHIP RULES
+------------------
+
+  Client -> Projects
+    One client has many projects.
+    Deleting a client is blocked if it has projects (or cascades - TBD).
+
+  Project -> Client
+    A project always belongs to exactly one client.
+    Client name is denormalised into project at creation for display without joins.
+
+  Project -> Documents
+    One project accumulates documents across multiple generation runs.
+    Re-generating replaces existing docs for that run (by packageId or all - TBD).
+
+  User -> Projects
+    Projects record createdBy userId.
+    No ownership restrictions - any manager can view/generate.
+
+  GenerateRequest -> Project
+    The generate form either selects an existing project (pre-fills all fields)
+    or creates a new one inline.
+    All GenerateRequest fields map 1:1 to Project fields.
+
+
+GENERATEREQUEST -> PROJECT FIELD MAPPING
+-----------------------------------------
+
+  GenerateRequest field       Project field         Notes
+  --------------------------  --------------------  ---------------------------
+  client                      (Client lookup/create) Not stored on Project
+  sheetRef                    sheetRef
+  projectName                 projectName
+  projectType                 projectType
+  projectSize                 projectSize
+  value                       value
+  startDate                   startDate
+  endDate                     endDate
+  summary                     summary
+  billingMilestones           billingMilestones
+  flipsideStakeholders        flipsideStakeholders
+  clientStakeholders          clientStakeholders
+  sponsorIndex                sponsorName + sponsorRole  resolved at creation
+
+
+NEW API ENDPOINTS
+-----------------
+
+  Clients
+    GET    /api/clients              list all
+    POST   /api/clients              create { name }
+    PUT    /api/clients/:id          update name
+    DELETE /api/clients/:id          delete (blocked if has projects)
+
+  Projects
+    GET    /api/projects?clientId=X  list by client
+    GET    /api/projects/:id         get single (pre-fills form)
+    POST   /api/projects             create { clientId, ...projectFields }
+    PUT    /api/projects/:id         update fields
+    DELETE /api/projects/:id         delete + cascade delete documents + files
+
+  Documents
+    GET    /api/projects/:id/documents   list stored docs for project
+    GET    /api/documents/:id/download   stream file download
+    DELETE /api/documents/:id            delete record + file from disk
+
+  Generate route change:
+    Add projectId? (optional) to GenerateRequest.
+    After streaming completes, save each doc as a StoredDocument record
+    and write the buffer to data/documents/{projectId}/.
+
+
+GOVERNANCE FORM CHANGES
+------------------------
+
+  1. Client field
+     Changes from plain text input to a searchable <Select>.
+     Includes a "+ New client" inline option (small modal/popover).
+
+  2. Project field
+     New <Select> filtered by selected client.
+     Includes a "+ New project" inline option.
+     Selecting an existing project pre-fills all other form fields
+     from the stored project data.
+
+  3. On submit
+     If a new project was named: POST /api/projects first,
+     then POST /api/generate with the new projectId.
+
+
+ADMIN UI CHANGES
+-----------------
+
+  Two new tabs on the admin page:
+
+  Clients tab
+    - Table: Name | Projects | Created | Actions (edit name, delete)
+    - "Add client" button
+
+  Projects tab
+    - Table: Sheet Ref | Project Name | Client | Type | Created | Documents | Actions
+    - Filter by client dropdown
+    - Click row -> expand to show stored documents with download links
+    - Delete project (with confirmation, lists docs that will be removed)
+
+
+STORAGE SERVICE ADDITIONS (IStorage interface)
+----------------------------------------------
+
+  // Clients
+  listClients()                                     -> Promise<Client[]>
+  createClient(data)                                -> Promise<Client>
+  updateClient(id, name)                            -> Promise<Client>
+  deleteClient(id)                                  -> Promise<void>
+
+  // Projects
+  listProjects(clientId?)                           -> Promise<Project[]>
+  getProject(id)                                    -> Promise<Project | undefined>
+  createProject(data)                               -> Promise<Project>
+  updateProject(id, data)                           -> Promise<Project>
+  deleteProject(id)                                 -> Promise<void>
+
+  // Documents
+  listDocuments(projectId)                          -> Promise<StoredDocument[]>
+  createDocument(data)                              -> Promise<StoredDocument>
+  deleteDocument(id)                                -> Promise<StoredDocument>
+
+
+IMPLEMENTATION SEQUENCE
+------------------------
+
+  1. Storage layer
+     Add Client / Project / StoredDocument types + CRUD to storage.ts.
+     Update store.json seed with empty arrays for new collections.
+
+  2. API routes
+     Add clients, projects, documents endpoints.
+     Modify generate route to save docs after stream completes.
+
+  3. Document persistence
+     Write generated buffers to data/documents/{projectId}/ after stream.
+
+  4. Governance form
+     Client select -> project select -> pre-fill logic.
+
+  5. Admin tabs
+     Clients and Projects management UI.
+
+  6. Download endpoint
+     Serve stored files via /api/documents/:id/download.
+
+
+KEY DECISIONS TO MAKE
+----------------------
+
+  #  Decision                       Options / Notes
+  -  ----------------------------   -----------------------------------------------
+  1  Re-generation behaviour        Replace all docs for the project?
+                                    Keep history with timestamps?
+                                    Recommended: replace by packageId, keep history
+                                    by run (each run gets a generatedAt timestamp).
+
+  2  Project editability            Can stakeholders/milestones be edited after
+                                    creation, or only via re-generate?
+
+  3  Client delete cascade          Block delete if projects exist, or cascade?
+
+  4  Disk management                No current cleanup. Add a max doc retention
+                                    policy or leave as manual admin task?
+
+  5  Form UX for new project        Inline create (faster, more complex state) vs.
+                                    separate "New Project" page (simpler, extra step).
+
+================================================
+Generated: 2026-03-31
