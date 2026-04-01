@@ -148,15 +148,17 @@ class DbStorage implements IStorage {
       }
     }
 
-    // Ensure admin user exists
+    // Ensure admin user exists and password matches ADMIN_PASSWORD env var
     const adminPassword = process.env.ADMIN_PASSWORD || "governance-admin";
     if (!process.env.ADMIN_PASSWORD) {
       console.warn("[WARN] ADMIN_PASSWORD env var not set — using default. Change this in production.");
     }
+    const hash = await hashPassword(adminPassword);
     const existingAdmin = await db.select().from(users).where(eq(users.username, "admin"));
     if (existingAdmin.length === 0) {
-      const hash = await hashPassword(adminPassword);
       await db.insert(users).values({ id: randomUUID(), username: "admin", password: hash, role: "admin", email: null });
+    } else {
+      await db.update(users).set({ password: hash }).where(eq(users.username, "admin"));
     }
   }
 
