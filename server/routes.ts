@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import { join, extname } from "path";
-import nodemailer from "nodemailer";
+import { sendEmail, emailEnabled } from "./email";
 import rateLimit from "express-rate-limit";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
@@ -65,23 +65,6 @@ function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
   res.status(403).json({ message: "Super admin access required" });
 }
 
-async function sendEmail(to: string, subject: string, text: string) {
-  if (!process.env.SMTP_HOST) {
-    console.log(`[EMAIL - no SMTP configured] To: ${to} | Subject: ${subject} | Body: ${text}`);
-    return;
-  }
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT || "587"),
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
-  await transporter.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-    to,
-    subject,
-    text,
-  });
-}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -333,12 +316,31 @@ export async function registerRoutes(
     const tempPassword = randomBytes(10).toString("hex");
     const hashed = await hashPassword(tempPassword);
     await storage.updateUserPassword(user.id, hashed);
-    await sendEmail(
-      user.email,
-      "Your temporary password",
-      `Your temporary password is: ${tempPassword}\n\nPlease log in and change it as soon as possible.`
-    );
+    await sendEmail({
+      to: user.email,
+      subject: "Your temporary password",
+      text: `Your temporary password is: ${tempPassword}\n\nPlease log in and change it as soon as possible.`
+    });
     res.json({ message: successMessage });
+  });
+
+  app.post("/api/admin/users/:id/reset-password", requireAdmin, async (req, res) => {
+    const target = await storage.getUser(req.params.id);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const tempPassword = randomBytes(6).toString("hex").toUpperCase();
+    const hashed = await hashPassword(tempPassword);
+    await storage.updateUserPassword(target.id, hashed);
+    audit("PASSWORD_RESET", req, { targetUser: target.username });
+    if (emailEnabled() && target.email) {
+      await sendEmail({
+        to: target.email,
+        subject: "Your password has been reset",
+        text: `Your password has been reset by an administrator.\n\nTemporary password: ${tempPassword}\n\nPlease log in and change it immediately.`,
+      });
+      res.json({ ok: true, emailed: true });
+    } else {
+      res.json({ ok: true, emailed: false, tempPassword });
+    }
   });
 
   // --- Packages ---
