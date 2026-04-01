@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -941,6 +941,16 @@ export default function AdminPage() {
                         <TableCell className="text-sm text-muted-foreground">{tpl.lastUpdated}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            {tpl.originalFilename && (
+                              <Button
+                                variant="ghost" size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-primary"
+                                onClick={() => window.open(`/api/admin/templates/${tpl.id}/download`, "_blank")}
+                              >
+                                <Download className="h-3.5 w-3.5 mr-1" />
+                                Download
+                              </Button>
+                            )}
                             <Button
                               variant="ghost" size="sm"
                               className="h-8 px-2 text-xs text-muted-foreground hover:text-primary"
