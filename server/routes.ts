@@ -107,7 +107,7 @@ export async function registerRoutes(
     if (!req.session.userId) return res.status(401).json({ message: "Not authenticated" });
     const user = await storage.getUser(req.session.userId);
     if (!user) return res.status(401).json({ message: "Not authenticated" });
-    res.json({ id: user.id, username: user.username, role: user.role, email: user.email });
+    res.json({ id: user.id, username: user.username, role: user.role, email: user.email, mustChangePassword: user.mustChangePassword });
   });
 
   app.patch("/api/auth/me", requireAuth, async (req, res) => {
@@ -140,6 +140,7 @@ export async function registerRoutes(
     if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
     const hash = await hashPassword(newPassword);
     await storage.updateUserPassword(req.session.userId!, hash);
+    await storage.updateUser(req.session.userId!, { mustChangePassword: false });
     res.json({ ok: true });
   });
 
@@ -233,7 +234,7 @@ export async function registerRoutes(
       return;
     }
     const hashed = await hashPassword(parsed.data.password);
-    const user = await storage.createUser({ ...parsed.data, password: hashed });
+    const user = await storage.createUser({ ...parsed.data, password: hashed, mustChangePassword: true });
     const { password: _, ...safeUser } = user;
     audit("USER_CREATED", req, { newUser: parsed.data.username, role: parsed.data.role });
     res.status(201).json(safeUser);
@@ -330,6 +331,7 @@ export async function registerRoutes(
     const tempPassword = randomBytes(6).toString("hex").toUpperCase();
     const hashed = await hashPassword(tempPassword);
     await storage.updateUserPassword(target.id, hashed);
+    await storage.updateUser(target.id, { mustChangePassword: true });
     audit("PASSWORD_RESET", req, { targetUser: target.username });
     if (emailEnabled() && target.email) {
       await sendEmail({

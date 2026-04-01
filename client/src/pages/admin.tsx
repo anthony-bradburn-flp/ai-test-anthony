@@ -35,6 +35,7 @@ type ApiUser = {
   username: string;
   email: string | null;
   role: string;
+  mustChangePassword: boolean;
 };
 
 // Mock Data
@@ -1292,7 +1293,14 @@ export default function AdminPage() {
                     }
                     return (
                       <TableRow key={u.id}>
-                        <TableCell className="font-semibold">{u.username}</TableCell>
+                        <TableCell className="font-semibold">
+                          <div className="flex items-center gap-2">
+                            {u.username}
+                            {u.mustChangePassword && (
+                              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Must change password</span>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{u.email ?? "—"}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={cn("font-medium bg-background capitalize", u.role === "admin" && "border-primary text-primary")}>

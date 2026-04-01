@@ -1,3 +1,4 @@
+import React from "react";
 import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -16,17 +17,26 @@ function ProtectedAdminRoute() {
   const { user, isLoading } = useAuth();
   if (isLoading) return null;
   if (!user) return <Redirect to="/login" />;
+  if (user.mustChangePassword) return <Redirect to="/account" />;
   if (user.role === "user") return <Redirect to="/?reason=admin-access" />;
   return <AdminPage />;
+}
+
+function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return null;
+  if (!user) return <Redirect to="/login" />;
+  if (user.mustChangePassword) return <Redirect to="/account" />;
+  return <Component />;
 }
 
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={GovernanceStarterPage} />
+      <Route path="/" component={() => <ProtectedRoute component={GovernanceStarterPage} />} />
       <Route path="/login" component={LoginPage} />
       <Route path="/admin" component={ProtectedAdminRoute} />
-      <Route path="/my-projects" component={MyProjectsPage} />
+      <Route path="/my-projects" component={() => <ProtectedRoute component={MyProjectsPage} />} />
       <Route path="/account" component={AccountPage} />
       <Route component={NotFound} />
     </Switch>
