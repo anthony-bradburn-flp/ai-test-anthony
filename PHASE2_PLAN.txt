@@ -176,6 +176,12 @@ ADMIN UI CHANGES
     - Click row -> expand to show stored documents with download links
     - Delete project (with confirmation, lists docs that will be removed)
 
+  Templates tab (existing — enhancements)
+    - Add download button per template row (admin + manager roles)
+    - Downloads the current template file as-is from disk
+    - Allows admins/managers to review the exact file being used for generation
+    - Endpoint: GET /api/admin/templates/:id/download  (streams filePath from disk)
+
 
 STORAGE SERVICE ADDITIONS (IStorage interface)
 ----------------------------------------------
@@ -223,26 +229,86 @@ IMPLEMENTATION SEQUENCE
      Serve stored files via /api/documents/:id/download.
 
 
-KEY DECISIONS TO MAKE
-----------------------
+DOCUMENT VERSIONING
+--------------------
 
-  #  Decision                       Options / Notes
+  Trigger: User selects an existing project that already has stored documents
+  and submits the generate form.
+
+  Modal prompt before generation:
+    "This project already has documents"
+    - Replace existing  → delete current docs, save new run as v1 (clean slate)
+    - Save as new version → keep existing, save new run as v(n+1)
+
+  StoredDocument additions:
+    version      : number    (1, 2, 3...)
+    versionLabel : string    ("v1", "v2" or custom e.g. "Post-Discovery")
+    isLatest     : boolean   (true on the most recent version per document type)
+    runId        : string    (uuid — groups all docs from the same generation run)
+
+  Behaviour:
+    - First generation       → all docs saved as v1, isLatest: true
+    - Replace                → existing docs deleted, new docs saved as v1
+    - New version            → existing docs unchanged, new docs saved as v(n+1),
+                               isLatest flipped on affected document types
+
+  Document list display (grouped by type, columns per version):
+    Document       | v1       | v2       | v3 (latest)
+    ---------------+----------+----------+------------
+    RACI           | download | download | download
+    RAID Log       | download | —        | download
+    Latest version highlighted.
+
+
+USER DOCUMENT HISTORY VIEW (/my-projects)
+------------------------------------------
+
+  Accessible to all logged-in users (not just admin/manager).
+  Shows only projects where createdBy === currentUser.id.
+  Admin users see all projects with a "Show all users" toggle.
+
+  Layout:
+    My Projects
+    [ Search... ]  [ Filter by client ▾ ]
+
+    Sheet Ref | Project Name | Client | Type | Last Run | Docs
+    ----------+--------------+--------+------+----------+-----
+    SM025     | Rebrand      | Acme   | Web  | Today    | 7 ↓
+    AB012     | App MVP      | ACME   | App  | Mar 28   | 5 ↓
+
+  Row expand → documents grouped by version, download per doc per version.
+  "Generate again" button → opens form pre-filled with project data.
+  No edit/delete controls (admin-only).
+
+  Navigation:
+    Add "My Projects" link to form header nav, visible to all logged-in users.
+
+
+KEY DECISIONS (RESOLVED)
+-------------------------
+
+  #  Decision                       Resolution
   -  ----------------------------   -----------------------------------------------
-  1  Re-generation behaviour        Replace all docs for the project?
-                                    Keep history with timestamps?
-                                    Recommended: replace by packageId, keep history
-                                    by run (each run gets a generatedAt timestamp).
+  1  Re-generation behaviour        Modal prompt: Replace or New Version.
+                                    Version tracked on StoredDocument (v1, v2...).
+                                    Replace deletes files (confirmed in modal).
 
-  2  Project editability            Can stakeholders/milestones be edited after
-                                    creation, or only via re-generate?
+  2  Project editability            Editable via re-generate (pre-fill flow).
+                                    No separate edit form needed initially.
 
-  3  Client delete cascade          Block delete if projects exist, or cascade?
+  3  Client delete cascade          Block delete if projects exist.
 
-  4  Disk management                No current cleanup. Add a max doc retention
-                                    policy or leave as manual admin task?
+  4  Disk management                No auto-cleanup. Manual admin task for now.
+                                    Max versions: no limit initially.
 
-  5  Form UX for new project        Inline create (faster, more complex state) vs.
-                                    separate "New Project" page (simpler, extra step).
+  5  Form UX for new project        Inline create (client + project selects with
+                                    "+ New" option triggering small modal/popover).
+
+  6  Version label                  Auto (v1, v2...) with optional custom label
+                                    entered in the version modal.
+
+  7  User history scope             createdBy filter for standard users.
+                                    Admins see all with toggle.
 
 ================================================
-Generated: 2026-03-31
+Updated: 2026-04-01

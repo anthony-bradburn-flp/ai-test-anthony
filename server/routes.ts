@@ -417,6 +417,16 @@ export async function registerRoutes(
     res.json(updated);
   });
 
+  app.get("/api/admin/templates/:id/download", requireAdmin, async (req, res) => {
+    const template = await storage.getTemplate(req.params.id);
+    if (!template?.filePath || !existsSync(template.filePath)) {
+      return res.status(404).json({ message: "Template file not found" });
+    }
+    const filename = template.originalFilename ?? template.name;
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.sendFile(template.filePath, { root: "/" });
+  });
+
   app.delete("/api/admin/templates/:id", requireAdmin, async (req, res) => {
     const existing = await storage.getTemplate(req.params.id);
     await storage.deleteTemplate(req.params.id);
