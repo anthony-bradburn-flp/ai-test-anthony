@@ -10,6 +10,7 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   email: text("email"),
   role: text("role").notNull().default("manager"),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
 });
 
 export const passwordSchema = z.string()

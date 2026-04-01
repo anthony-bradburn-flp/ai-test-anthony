@@ -124,7 +124,7 @@ export interface IStorage {
   listUsers(): Promise<SafeUser[]>;
   deleteUser(id: string): Promise<void>;
   updateUserPassword(id: string, hashedPassword: string): Promise<void>;
-  updateUser(id: string, fields: { username?: string; email?: string | null; role?: string }): Promise<SafeUser | undefined>;
+  updateUser(id: string, fields: { username?: string; email?: string | null; role?: string; mustChangePassword?: boolean }): Promise<SafeUser | undefined>;
   listTemplates(): Promise<Template[]>;
   createTemplate(name: string, type: string): Promise<Template>;
   updateTemplate(id: string, fields: { name?: string; type?: string; generateMode?: "ai" | "passthrough" | "placeholder"; documentAlias?: string }): Promise<Template | undefined>;

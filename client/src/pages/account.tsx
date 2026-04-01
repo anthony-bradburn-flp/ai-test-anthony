@@ -2,9 +2,9 @@ import { useState } from "react";
 import { useAuth, useLogout } from "@/hooks/use-auth";
 import { SiteLogo } from "@/components/page-header";
 import { Link } from "wouter";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { User } from "lucide-react";
+import { User, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export default function AccountPage() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const logout = useLogout();
   const isAdmin = user?.role === "admin" || user?.role === "manager";
 
@@ -52,6 +53,7 @@ export default function AccountPage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -77,6 +79,17 @@ export default function AccountPage() {
       </header>
 
       <main className="mx-auto max-w-[700px] px-[18px] pb-12 pt-6 space-y-6">
+
+        {/* Must change password banner */}
+        {user?.mustChangePassword && (
+          <div className="flex items-start gap-3 rounded-[10px] border border-amber-400 bg-amber-50 px-4 py-3 text-amber-800">
+            <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold text-sm">Password change required</p>
+              <p className="text-xs mt-0.5">Your account requires a new password before you can continue. Please update it below.</p>
+            </div>
+          </div>
+        )}
 
         {/* Profile */}
         <Card className="border border-border shadow-sm rounded-[14px]">
