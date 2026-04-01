@@ -59,3 +59,50 @@ export const generateRequestSchema = z.object({
 });
 
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;
+
+// --- Phase 2: Client / Project / StoredDocument types ---
+
+export type Client = {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+};
+
+export type Project = {
+  id: string;
+  clientId: string;
+  clientName: string;
+  sheetRef: string;
+  projectName: string;
+  projectType: string;
+  projectSize: string;
+  value: string;
+  startDate: string;
+  endDate: string;
+  summary: string;
+  sponsorName: string;
+  sponsorRole: string;
+  billingMilestones: { stage: string; percentage: number; date: string }[];
+  flipsideStakeholders: { name: string; role: string }[];
+  clientStakeholders: { name: string; role: string }[];
+  createdAt: string;
+  createdBy: string;
+  lastGeneratedAt?: string;
+};
+
+export type StoredDocument = {
+  id: string;
+  projectId: string;
+  name: string;
+  filename: string;
+  format: string;
+  storagePath: string;
+  fileSize: number;
+  generatedAt: string;
+  generatedBy: string;
+  runId: string;
+  version: number;
+  versionLabel: string;
+  isLatest: boolean;
+};

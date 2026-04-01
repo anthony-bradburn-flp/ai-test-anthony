@@ -13,7 +13,7 @@ import mammoth from "mammoth";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } from "docx";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
-import { storage, verifyPassword, hashPassword } from "./storage";
+import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, DATA_DIR } from "./storage";
 import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey } from "./secrets";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
@@ -446,6 +446,100 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // --- Client & Project management ---
+
+  app.get("/api/clients", requireAuth, async (_req, res) => {
+    res.json(await storage.listClients());
+  });
+
+  app.post("/api/clients", requireAuth, async (req, res) => {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "Name required" });
+    const existing = (await storage.listClients()).find((c) => c.name.toLowerCase() === name.trim().toLowerCase());
+    if (existing) return res.json(existing);
+    const client = await storage.createClient(name.trim(), req.session.userId!);
+    res.json(client);
+  });
+
+  app.patch("/api/clients/:id", requireAdmin, async (req, res) => {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "Name required" });
+    const updated = await storage.updateClient(req.params.id, name.trim());
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    res.json(updated);
+  });
+
+  app.delete("/api/clients/:id", requireAdmin, async (req, res) => {
+    const projects = await storage.listProjects(req.params.id);
+    if (projects.length > 0) return res.status(400).json({ message: "Cannot delete client with existing projects" });
+    await storage.deleteClient(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/projects", requireAuth, async (req, res) => {
+    const clientId = req.query.clientId as string | undefined;
+    const session = req.session as { userId?: string; role?: string };
+    const createdBy = session.role === "admin" || session.role === "manager" ? undefined : session.userId;
+    res.json(await storage.listProjects(clientId, createdBy));
+  });
+
+  app.get("/api/projects/mine", requireAuth, async (req, res) => {
+    const session = req.session as { userId?: string; role?: string };
+    const createdBy = session.role === "admin" ? undefined : session.userId!;
+    res.json(await storage.listProjects(undefined, createdBy));
+  });
+
+  app.get("/api/projects/:id", requireAuth, async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Not found" });
+    res.json(project);
+  });
+
+  app.post("/api/projects", requireAuth, async (req, res) => {
+    const { clientId, clientName, sheetRef, projectName, projectType, projectSize, value, startDate, endDate, summary, sponsorName, sponsorRole, billingMilestones, flipsideStakeholders, clientStakeholders } = req.body;
+    if (!clientId || !projectName) return res.status(400).json({ message: "clientId and projectName required" });
+    const project = await storage.createProject({
+      clientId, clientName, sheetRef, projectName, projectType, projectSize, value,
+      startDate, endDate, summary, sponsorName, sponsorRole,
+      billingMilestones: billingMilestones ?? [],
+      flipsideStakeholders: flipsideStakeholders ?? [],
+      clientStakeholders: clientStakeholders ?? [],
+      createdBy: req.session.userId!,
+    });
+    res.json(project);
+  });
+
+  app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+    const updated = await storage.updateProject(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    res.json(updated);
+  });
+
+  app.delete("/api/projects/:id", requireAdmin, async (req, res) => {
+    await storage.deleteDocumentsByProject(req.params.id);
+    await storage.deleteProject(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/projects/:id/documents", requireAuth, async (req, res) => {
+    res.json(await storage.listDocuments(req.params.id));
+  });
+
+  app.get("/api/documents/:id/download", requireAuth, async (req, res) => {
+    const doc = await storage.getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ message: "Not found" });
+    const fullPath = join(DATA_DIR, doc.storagePath);
+    if (!existsSync(fullPath)) return res.status(404).json({ message: "File not found on disk" });
+    res.setHeader("Content-Disposition", `attachment; filename="${doc.filename}"`);
+    res.sendFile(fullPath, { root: "/" });
+  });
+
+  app.delete("/api/documents/:id", requireAdmin, async (req, res) => {
+    const doc = await storage.deleteDocument(req.params.id);
+    if (!doc) return res.status(404).json({ message: "Not found" });
+    res.json({ ok: true });
+  });
+
   // --- Read-only endpoints for authenticated (non-admin) users ---
   app.get("/api/templates", requireAuth, async (_req, res) => {
     res.json(await storage.listTemplates());
@@ -484,6 +578,8 @@ export async function registerRoutes(
 
     const settings = await storage.getAiSettings();
     const projectData = parsed.data;
+    const projectId = typeof req.body.projectId === "string" ? req.body.projectId : undefined;
+    const versionMode: "replace" | "new" = req.body.versionMode === "new" ? "new" : "replace";
 
     const activeKey = settings.provider === "anthropic" ? getAnthropicKey() : getOpenAIKey();
     if (!activeKey) {
@@ -500,6 +596,12 @@ export async function registerRoutes(
     res.flushHeaders();
 
     const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
+    const generatedDocBuffers: Array<{ name: string; filename: string; format: string; buffer: Buffer }> = [];
+    const sendDoc = (event: Record<string, unknown>) => {
+      const doc = event.document as { name: string; filename: string; format: string; content: string } | undefined;
+      if (doc?.content) generatedDocBuffers.push({ name: doc.name, filename: doc.filename, format: doc.format, buffer: Buffer.from(doc.content, "base64") });
+      send(event);
+    };
 
     try {
       // Load templates, packages, and extract supporting docs all in parallel
@@ -592,10 +694,10 @@ export async function registerRoutes(
         const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
         try {
           const fileBuffer = readFileSync(tpl.filePath!);
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
         } catch (err) {
           console.error(`[generate] passthrough read failed for ${docName}:`, err);
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: "", preview: `[Passthrough failed — file could not be read]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: "", preview: `[Passthrough failed — file could not be read]` } });
         }
       }
 
@@ -713,10 +815,10 @@ export async function registerRoutes(
           } else {
             fileBuffer = readFileSync(tpl.filePath!);
           }
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Placeholder template filled: ${tpl.originalFilename}]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Placeholder template filled: ${tpl.originalFilename}]` } });
         } catch (err) {
           console.error(`[generate] placeholder fill failed for ${docName}:`, err);
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: readFileSync(tpl.filePath!).toString("base64"), preview: `[Placeholder fill failed — template included as-is]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: readFileSync(tpl.filePath!).toString("base64"), preview: `[Placeholder fill failed — template included as-is]` } });
         }
       }
 
@@ -761,12 +863,12 @@ export async function registerRoutes(
               preview = doc.content ?? "";
             }
 
-            send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
+            sendDoc({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
           } catch (err) {
             console.error(`[generate] AI doc build failed for ${doc.name}:`, err);
             // Always send a document event so the client count stays consistent
             const fallback = Buffer.from(`[Generation failed for ${doc.name}: ${err instanceof Error ? err.message : "unknown error"}]`, "utf8");
-            send({ type: "document", document: { name: doc.name, filename: filename.replace(/\.[^.]+$/, ".txt"), format: "txt", content: fallback.toString("base64"), preview: "" } });
+            sendDoc({ type: "document", document: { name: doc.name, filename: filename.replace(/\.[^.]+$/, ".txt"), format: "txt", content: fallback.toString("base64"), preview: "" } });
           }
         }));
       }
@@ -787,16 +889,60 @@ export async function registerRoutes(
           } else {
             fileBuffer = readFileSync(execSummaryTpl.filePath);
           }
-          send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: fileBuffer.toString("base64"), preview: "[Executive Summary generated]" } });
+          sendDoc({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: fileBuffer.toString("base64"), preview: "[Executive Summary generated]" } });
         } catch (err) {
           console.error("[generate] executive summary fill failed — sending unfilled template:", err);
           // Always send a document event so the client count stays consistent
-          send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: readFileSync(execSummaryTpl.filePath).toString("base64"), preview: "[Executive Summary fill failed — template included as-is]" } });
+          sendDoc({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: readFileSync(execSummaryTpl.filePath).toString("base64"), preview: "[Executive Summary fill failed — template included as-is]" } });
         }
       }
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
       send({ type: "done", provider: settings.provider });
+
+      // --- Persist documents against project ---
+      if (projectId && generatedDocBuffers.length > 0) {
+        try {
+          const projectDir = join(DOCUMENTS_DIR, projectId);
+          if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+          const existingDocs = await storage.listDocuments(projectId);
+          const runId = randomBytes(8).toString("hex");
+
+          // Determine next version number
+          let nextVersion = 1;
+          if (existingDocs.length > 0) {
+            if (versionMode === "replace") {
+              await storage.deleteDocumentsByProject(projectId);
+            } else {
+              const maxVersion = Math.max(...existingDocs.map((d) => d.version));
+              nextVersion = maxVersion + 1;
+              // Mark existing docs as not latest
+              for (const d of existingDocs) {
+                await storage.updateProject(projectId, {}); // no-op but keeps pattern
+              }
+            }
+          }
+
+          for (const { name, filename, format, buffer } of generatedDocBuffers) {
+            const docId = randomBytes(8).toString("hex");
+            const storagePath = `documents/${projectId}/${docId}_${filename}`;
+            const fullPath = join(DATA_DIR, storagePath);
+            writeFileSync(fullPath, buffer);
+            await storage.createDocument({
+              projectId, name, filename, format,
+              storagePath, fileSize: buffer.length,
+              generatedAt: new Date().toISOString(),
+              generatedBy: req.session.userId!,
+              runId, version: nextVersion,
+              versionLabel: `v${nextVersion}`, isLatest: true,
+            });
+          }
+          await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+        } catch (saveErr) {
+          console.error("[generate] Failed to save documents:", saveErr);
+        }
+      }
+
       res.end();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";

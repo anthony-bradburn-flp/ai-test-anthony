@@ -1,13 +1,15 @@
-import { type User, type InsertUser } from "@shared/schema";
+import { type User, type InsertUser, type Client, type Project, type StoredDocument } from "@shared/schema";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 
 const DATA_DIR = join(process.cwd(), "data");
 const DATA_FILE = join(DATA_DIR, "store.json");
 
-function loadPersistedData(): { users: User[]; templates: Template[]; packages: Package[]; aiSettings?: Partial<AiSettings> } {
+const DOCUMENTS_DIR = join(DATA_DIR, "documents");
+
+function loadPersistedData(): { users: User[]; templates: Template[]; packages: Package[]; aiSettings?: Partial<AiSettings>; clients?: Client[]; projects?: Project[]; documents?: StoredDocument[] } {
   try {
     if (existsSync(DATA_FILE)) {
       return JSON.parse(readFileSync(DATA_FILE, "utf8"));
@@ -18,10 +20,10 @@ function loadPersistedData(): { users: User[]; templates: Template[]; packages: 
   return { users: [], templates: [], packages: [] };
 }
 
-function savePersistedData(users: User[], templates: Template[], packages: Package[], aiSettings: AiSettings) {
+function savePersistedData(users: User[], templates: Template[], packages: Package[], aiSettings: AiSettings, clients: Client[], projects: Project[], documents: StoredDocument[]) {
   try {
     if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(DATA_FILE, JSON.stringify({ users, templates, packages, aiSettings }, null, 2));
+    writeFileSync(DATA_FILE, JSON.stringify({ users, templates, packages, aiSettings, clients, projects, documents }, null, 2));
   } catch (e) {
     console.error("[storage] Failed to persist data:", e);
   }
@@ -118,6 +120,24 @@ export interface IStorage {
   deletePackage(id: string): Promise<void>;
   getAiSettings(): Promise<AiSettings>;
   updateAiSettings(settings: Partial<AiSettings>): Promise<AiSettings>;
+  // Clients
+  listClients(): Promise<Client[]>;
+  getClient(id: string): Promise<Client | undefined>;
+  createClient(name: string, createdBy: string): Promise<Client>;
+  updateClient(id: string, name: string): Promise<Client | undefined>;
+  deleteClient(id: string): Promise<void>;
+  // Projects
+  listProjects(clientId?: string, createdBy?: string): Promise<Project[]>;
+  getProject(id: string): Promise<Project | undefined>;
+  createProject(data: Omit<Project, "id" | "createdAt">): Promise<Project>;
+  updateProject(id: string, fields: Partial<Project>): Promise<Project | undefined>;
+  deleteProject(id: string): Promise<void>;
+  // Stored Documents
+  listDocuments(projectId: string): Promise<StoredDocument[]>;
+  getDocument(id: string): Promise<StoredDocument | undefined>;
+  createDocument(data: Omit<StoredDocument, "id">): Promise<StoredDocument>;
+  deleteDocument(id: string): Promise<StoredDocument | undefined>;
+  deleteDocumentsByProject(projectId: string): Promise<void>;
 }
 
 const DEFAULT_PACKAGES: Package[] = [
@@ -142,6 +162,9 @@ export class MemStorage implements IStorage {
   private aiSettings: AiSettings;
   private templates: Map<string, Template>;
   private packages: Map<string, Package>;
+  private clients: Map<string, Client>;
+  private projects: Map<string, Project>;
+  private documents: Map<string, StoredDocument>;
 
   constructor() {
     const persisted = loadPersistedData();
@@ -155,6 +178,9 @@ export class MemStorage implements IStorage {
     this.packages = persisted.packages.length
       ? new Map(persisted.packages.map((p) => [p.id, p]))
       : new Map(DEFAULT_PACKAGES.map((p) => [p.id, p]));
+    this.clients = new Map((persisted.clients ?? []).map((c) => [c.id, c]));
+    this.projects = new Map((persisted.projects ?? []).map((p) => [p.id, p]));
+    this.documents = new Map((persisted.documents ?? []).map((d) => [d.id, d]));
     // Migrate: replace legacy document names with current template names
     this.migratePackageNames();
     // Ensure admin user always exists (re-seed if missing or password changed)
@@ -168,6 +194,8 @@ export class MemStorage implements IStorage {
         this.createUser({ username: "admin", password: hash, role: "admin" });
       });
     }
+    // Ensure documents directory exists
+    if (!existsSync(DOCUMENTS_DIR)) mkdirSync(DOCUMENTS_DIR, { recursive: true });
   }
 
   private persist() {
@@ -176,6 +204,9 @@ export class MemStorage implements IStorage {
       Array.from(this.templates.values()),
       Array.from(this.packages.values()),
       this.aiSettings,
+      Array.from(this.clients.values()),
+      Array.from(this.projects.values()),
+      Array.from(this.documents.values()),
     );
   }
 
@@ -330,6 +361,97 @@ export class MemStorage implements IStorage {
     this.persist();
     return { ...this.aiSettings };
   }
+
+  // --- Clients ---
+  async listClients(): Promise<Client[]> {
+    return Array.from(this.clients.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  async getClient(id: string): Promise<Client | undefined> {
+    return this.clients.get(id);
+  }
+  async createClient(name: string, createdBy: string): Promise<Client> {
+    const client: Client = { id: randomUUID(), name, createdAt: new Date().toISOString(), createdBy };
+    this.clients.set(client.id, client);
+    this.persist();
+    return client;
+  }
+  async updateClient(id: string, name: string): Promise<Client | undefined> {
+    const c = this.clients.get(id);
+    if (!c) return undefined;
+    const updated = { ...c, name };
+    this.clients.set(id, updated);
+    this.persist();
+    return updated;
+  }
+  async deleteClient(id: string): Promise<void> {
+    this.clients.delete(id);
+    this.persist();
+  }
+
+  // --- Projects ---
+  async listProjects(clientId?: string, createdBy?: string): Promise<Project[]> {
+    let list = Array.from(this.projects.values());
+    if (clientId) list = list.filter((p) => p.clientId === clientId);
+    if (createdBy) list = list.filter((p) => p.createdBy === createdBy);
+    return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  async getProject(id: string): Promise<Project | undefined> {
+    return this.projects.get(id);
+  }
+  async createProject(data: Omit<Project, "id" | "createdAt">): Promise<Project> {
+    const project: Project = { ...data, id: randomUUID(), createdAt: new Date().toISOString() };
+    this.projects.set(project.id, project);
+    this.persist();
+    return project;
+  }
+  async updateProject(id: string, fields: Partial<Project>): Promise<Project | undefined> {
+    const p = this.projects.get(id);
+    if (!p) return undefined;
+    const updated = { ...p, ...fields };
+    this.projects.set(id, updated);
+    this.persist();
+    return updated;
+  }
+  async deleteProject(id: string): Promise<void> {
+    this.projects.delete(id);
+    this.persist();
+  }
+
+  // --- Stored Documents ---
+  async listDocuments(projectId: string): Promise<StoredDocument[]> {
+    return Array.from(this.documents.values())
+      .filter((d) => d.projectId === projectId)
+      .sort((a, b) => a.version - b.version || a.name.localeCompare(b.name));
+  }
+  async getDocument(id: string): Promise<StoredDocument | undefined> {
+    return this.documents.get(id);
+  }
+  async createDocument(data: Omit<StoredDocument, "id">): Promise<StoredDocument> {
+    const doc: StoredDocument = { ...data, id: randomUUID() };
+    this.documents.set(doc.id, doc);
+    this.persist();
+    return doc;
+  }
+  async deleteDocument(id: string): Promise<StoredDocument | undefined> {
+    const doc = this.documents.get(id);
+    if (!doc) return undefined;
+    // Delete file from disk
+    const fullPath = join(DATA_DIR, doc.storagePath);
+    try { if (existsSync(fullPath)) unlinkSync(fullPath); } catch { /* ignore */ }
+    this.documents.delete(id);
+    this.persist();
+    return doc;
+  }
+  async deleteDocumentsByProject(projectId: string): Promise<void> {
+    const docs = Array.from(this.documents.values()).filter((d) => d.projectId === projectId);
+    for (const doc of docs) {
+      const fullPath = join(DATA_DIR, doc.storagePath);
+      try { if (existsSync(fullPath)) unlinkSync(fullPath); } catch { /* ignore */ }
+      this.documents.delete(doc.id);
+    }
+    this.persist();
+  }
 }
 
 export const storage = new MemStorage();
+export { DOCUMENTS_DIR, DATA_DIR };
