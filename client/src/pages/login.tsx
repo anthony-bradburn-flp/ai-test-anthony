@@ -4,6 +4,7 @@ import { Link, Redirect, useSearch } from "wouter";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth, useLogin } from "@/hooks/use-auth";
@@ -75,9 +76,8 @@ export default function LoginPage() {
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="password">Password</Label>
-                  <Input
+                  <PasswordInput
                     id="password"
-                    type="password"
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
