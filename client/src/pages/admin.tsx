@@ -3,7 +3,7 @@ import { SiteLogo } from "@/components/page-header";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -215,6 +215,22 @@ export default function AdminPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast.success("User deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/users/${id}/reset-password`, { method: "POST" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to reset password"); }
+      return res.json() as Promise<{ ok: boolean; emailed: boolean; tempPassword?: string }>;
+    },
+    onSuccess: (data) => {
+      if (data.emailed) {
+        toast.success("Password reset — temporary password emailed to user");
+      } else {
+        toast.success(`Temporary password: ${data.tempPassword}`, { duration: 30000, description: "Share this with the user — it won't be shown again." });
+      }
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -1288,6 +1304,16 @@ export default function AdminPage() {
                             {canEdit && (
                               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => startEditing(u)}>
                                 <Edit2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {canEdit && !isSelf && (
+                              <Button
+                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-amber-600"
+                                title="Reset password"
+                                onClick={() => { if (confirm(`Reset password for "${u.username}"? A temporary password will be generated.`)) resetPasswordMutation.mutate(u.id); }}
+                                disabled={resetPasswordMutation.isPending}
+                              >
+                                <KeyRound className="h-4 w-4" />
                               </Button>
                             )}
                             {canEdit && !isSelf && (

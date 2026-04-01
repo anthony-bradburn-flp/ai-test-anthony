@@ -129,7 +129,7 @@ export default function LoginPage() {
                 <Lock className="h-5 w-5 text-primary" />
               </div>
               <CardTitle className="text-xl">Reset Password</CardTitle>
-              <CardDescription>Enter your username and we'll send a temporary password to your registered email.</CardDescription>
+              <CardDescription>Enter your username. If your account has a registered email, a temporary password will be sent. Otherwise, contact your admin to reset your password.</CardDescription>
             </CardHeader>
             <CardContent>
               {forgotMessage ? (
