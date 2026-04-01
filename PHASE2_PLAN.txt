@@ -176,6 +176,12 @@ ADMIN UI CHANGES
     - Click row -> expand to show stored documents with download links
     - Delete project (with confirmation, lists docs that will be removed)
 
+  Templates tab (existing — enhancements)
+    - Add download button per template row (admin + manager roles)
+    - Downloads the current template file as-is from disk
+    - Allows admins/managers to review the exact file being used for generation
+    - Endpoint: GET /api/admin/templates/:id/download  (streams filePath from disk)
+
 
 STORAGE SERVICE ADDITIONS (IStorage interface)
 ----------------------------------------------
