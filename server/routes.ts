@@ -302,6 +302,12 @@ export async function registerRoutes(
   // --- Forgot Password ---
 
   app.post("/api/auth/forgot-password", forgotPasswordRateLimit, async (req, res) => {
+    // Self-service reset is only available when an email provider is configured.
+    // Without one, users must contact their admin.
+    if (!emailEnabled()) {
+      res.status(503).json({ error: "Self-service password reset is not available. Contact your administrator." });
+      return;
+    }
     const { username } = req.body;
     if (!username || typeof username !== "string") {
       res.status(400).json({ error: "Username is required" });
@@ -317,6 +323,7 @@ export async function registerRoutes(
     const tempPassword = randomBytes(10).toString("hex");
     const hashed = await hashPassword(tempPassword);
     await storage.updateUserPassword(user.id, hashed);
+    await storage.updateUser(user.id, { mustChangePassword: true });
     await sendEmail({
       to: user.email,
       subject: "Your temporary password",
