@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SiteLogo } from "@/components/page-header";
 import { useMutation } from "@tanstack/react-query";
 import { Link, Redirect, useSearch } from "wouter";
 import { Lock } from "lucide-react";
@@ -51,6 +52,7 @@ export default function LoginPage() {
       <header className="mx-auto w-full max-w-[1100px] px-[18px] pb-2 pt-7">
         <div className="flex items-center justify-between">
           <div>
+            <SiteLogo />
             <h1 className="mb-1.5 text-[26px] font-extrabold tracking-[0.2px] text-foreground">
               Project Intake Form
             </h1>
