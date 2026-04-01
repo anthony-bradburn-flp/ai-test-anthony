@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { SiteLogo } from "@/components/page-header";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
@@ -584,6 +585,7 @@ export default function AdminPage() {
       <header className="mx-auto max-w-[1100px] px-[18px] pb-4 pt-7 border-b border-border">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
+            <SiteLogo />
             <div className="flex items-center gap-2 mb-1.5">
               <Settings className="h-6 w-6 text-primary" />
               <h1 className="text-[26px] font-extrabold tracking-[0.2px] text-foreground m-0 leading-none">
