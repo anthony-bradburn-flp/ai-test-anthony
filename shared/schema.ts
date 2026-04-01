@@ -1,8 +1,9 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, json } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// ---- Users ----
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(),
@@ -28,8 +29,92 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
-// --- Generate request schema (mirrors client formSchema) ---
+// ---- Templates ----
+export const templatesTable = pgTable("templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  lastUpdated: text("last_updated").notNull(),
+  filePath: text("file_path"),
+  originalFilename: text("original_filename"),
+  fileSize: integer("file_size"),
+  generateMode: text("generate_mode").$type<"ai" | "passthrough" | "placeholder">(),
+  documentAlias: text("document_alias"),
+});
 
+// ---- Packages ----
+export const packagesTable = pgTable("packages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: text("type").notNull(),
+  description: text("description").notNull(),
+  documents: json("documents").$type<string[]>().notNull(),
+});
+
+// ---- AI Settings (singleton row, id always = 1) ----
+export const aiSettingsTable = pgTable("ai_settings", {
+  id: integer("id").primaryKey(),
+  systemPrompt: text("system_prompt").notNull(),
+  companyName: text("company_name").notNull(),
+  trainingDocContent: text("training_doc_content"),
+  trainingDocFilename: text("training_doc_filename"),
+  trainingDocUploadedAt: text("training_doc_uploaded_at"),
+  trainingDocSize: integer("training_doc_size"),
+});
+
+// ---- Clients ----
+export const clientsTable = pgTable("clients", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  createdAt: text("created_at").notNull(),
+  createdBy: text("created_by").notNull(),
+});
+
+// ---- Projects ----
+export const projectsTable = pgTable("projects", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  clientId: varchar("client_id").notNull().references(() => clientsTable.id),
+  clientName: text("client_name").notNull(),
+  sheetRef: text("sheet_ref").notNull(),
+  projectName: text("project_name").notNull(),
+  projectType: text("project_type").notNull(),
+  projectSize: text("project_size").notNull(),
+  value: text("value").notNull(),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+  summary: text("summary").notNull(),
+  sponsorName: text("sponsor_name").notNull(),
+  sponsorRole: text("sponsor_role").notNull(),
+  billingMilestones: json("billing_milestones").$type<{ stage: string; percentage: number; date: string }[]>().notNull(),
+  flipsideStakeholders: json("flipside_stakeholders").$type<{ name: string; role: string }[]>().notNull(),
+  clientStakeholders: json("client_stakeholders").$type<{ name: string; role: string }[]>().notNull(),
+  createdAt: text("created_at").notNull(),
+  createdBy: text("created_by").notNull(),
+  lastGeneratedAt: text("last_generated_at"),
+});
+
+// ---- Stored Documents ----
+export const storedDocumentsTable = pgTable("stored_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projectsTable.id),
+  name: text("name").notNull(),
+  filename: text("filename").notNull(),
+  format: text("format").notNull(),
+  storagePath: text("storage_path").notNull(),
+  fileSize: integer("file_size").notNull(),
+  generatedAt: text("generated_at").notNull(),
+  generatedBy: text("generated_by").notNull(),
+  runId: text("run_id").notNull(),
+  version: integer("version").notNull(),
+  versionLabel: text("version_label").notNull(),
+  isLatest: boolean("is_latest").notNull().default(false),
+});
+
+// Derived types
+export type Client = typeof clientsTable.$inferSelect;
+export type Project = typeof projectsTable.$inferSelect;
+export type StoredDocument = typeof storedDocumentsTable.$inferSelect;
+
+// ---- Generate request schema ----
 const stakeholderSchema = z.object({
   name: z.string().min(1).max(100),
   role: z.string().min(1).max(100),
@@ -59,50 +144,3 @@ export const generateRequestSchema = z.object({
 });
 
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;
-
-// --- Phase 2: Client / Project / StoredDocument types ---
-
-export type Client = {
-  id: string;
-  name: string;
-  createdAt: string;
-  createdBy: string;
-};
-
-export type Project = {
-  id: string;
-  clientId: string;
-  clientName: string;
-  sheetRef: string;
-  projectName: string;
-  projectType: string;
-  projectSize: string;
-  value: string;
-  startDate: string;
-  endDate: string;
-  summary: string;
-  sponsorName: string;
-  sponsorRole: string;
-  billingMilestones: { stage: string; percentage: number; date: string }[];
-  flipsideStakeholders: { name: string; role: string }[];
-  clientStakeholders: { name: string; role: string }[];
-  createdAt: string;
-  createdBy: string;
-  lastGeneratedAt?: string;
-};
-
-export type StoredDocument = {
-  id: string;
-  projectId: string;
-  name: string;
-  filename: string;
-  format: string;
-  storagePath: string;
-  fileSize: number;
-  generatedAt: string;
-  generatedBy: string;
-  runId: string;
-  version: number;
-  versionLabel: string;
-  isLatest: boolean;
-};

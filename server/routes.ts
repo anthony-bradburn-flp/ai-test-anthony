@@ -916,10 +916,7 @@ export async function registerRoutes(
             } else {
               const maxVersion = Math.max(...existingDocs.map((d) => d.version));
               nextVersion = maxVersion + 1;
-              // Mark existing docs as not latest
-              for (const d of existingDocs) {
-                await storage.updateProject(projectId, {}); // no-op but keeps pattern
-              }
+              await storage.markDocumentsNotLatest(projectId);
             }
           }
 
