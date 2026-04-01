@@ -225,7 +225,7 @@ class DbStorage implements IStorage {
 
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = randomUUID();
-    const user = { id, username: insertUser.username, password: insertUser.password, email: insertUser.email ?? null, role: insertUser.role ?? "user" };
+    const user = { id, username: insertUser.username, password: insertUser.password, email: insertUser.email ?? null, role: insertUser.role ?? "user", mustChangePassword: insertUser.mustChangePassword ?? false };
     await db.insert(users).values(user);
     return user;
   }
