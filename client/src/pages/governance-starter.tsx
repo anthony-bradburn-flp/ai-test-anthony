@@ -533,6 +533,9 @@ export default function GovernanceStarterPage() {
                 Admin
               </Button>
             )}
+            <Link href="/account">
+              <Button variant="outline" className="font-bold">My Account</Button>
+            </Link>
             <Button variant="ghost" className="font-bold" onClick={() => logout.mutate()} disabled={logout.isPending}>
               {logout.isPending ? "Signing out…" : "Sign Out"}
             </Button>

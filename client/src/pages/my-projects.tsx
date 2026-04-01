@@ -104,6 +104,7 @@ export default function MyProjectsPage() {
           <div className="flex gap-2">
             <Link href="/"><Button variant="outline" className="font-bold">Back to Form</Button></Link>
             {isAdmin && <Link href="/admin"><Button variant="outline" className="font-bold">Admin</Button></Link>}
+            <Link href="/account"><Button variant="outline" className="font-bold">My Account</Button></Link>
             <Button variant="outline" className="font-bold" onClick={() => logout.mutate()}>Log out</Button>
           </div>
         </div>

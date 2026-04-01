@@ -9,6 +9,7 @@ import GovernanceStarterPage from "@/pages/governance-starter";
 import AdminPage from "@/pages/admin";
 import LoginPage from "@/pages/login";
 import MyProjectsPage from "@/pages/my-projects";
+import AccountPage from "@/pages/account";
 import { useAuth } from "@/hooks/use-auth";
 
 function ProtectedAdminRoute() {
@@ -26,6 +27,7 @@ function Router() {
       <Route path="/login" component={LoginPage} />
       <Route path="/admin" component={ProtectedAdminRoute} />
       <Route path="/my-projects" component={MyProjectsPage} />
+      <Route path="/account" component={AccountPage} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,0 +1,206 @@
+USER ACCESS — PHASE 2 & 3 PLAN
+================================
+Last updated: 2026-04-01
+
+OVERVIEW
+--------
+Phase 1 (complete): User profile page — users can update their username, email,
+and password from a My Account page accessible from any page header.
+
+Phase 2 and 3 extend this with Microsoft 365 integration, first for file storage
+(SharePoint) and then for authentication (SSO).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 2 — M365 OAUTH & SHAREPOINT DOCUMENT STORAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Goal
+----
+Replace local disk document storage with SharePoint. Generated documents are
+uploaded to a configured SharePoint site, organised by client/project. Users
+still log in with username/password — M365 is used for storage only.
+
+Recommended Approach: Service Account (Option B)
+------------------------------------------------
+A single M365 service account is configured by an admin. All documents are
+uploaded under that account to a shared SharePoint site. No per-user OAuth
+flow required. Better for a team tool where everyone shares one workspace.
+
+Folder Structure in SharePoint
+-------------------------------
+  Documents/
+    {ClientName}/
+      {SheetRef}_{ProjectName}/
+        v1/
+          AB001_Flowtraders_ExecutiveSummary.docx
+          AB001_Flowtraders_RACI.xlsx
+        v2/
+          AB001_Flowtraders_ExecutiveSummary.docx
+
+What Changes in the Codebase
+-----------------------------
+- server/sharepoint.ts (new): Microsoft Graph API client
+    uploadFile(buffer, path) → returns SharePoint item ID
+    downloadFile(itemId) → returns Buffer
+    deleteFile(itemId)
+    ensureFolder(path)
+- server/routes.ts: After generating doc buffers, call sharepoint.uploadFile()
+  instead of writeFileSync(). storagePath field stores SharePoint item ID.
+- server/storage.ts: deleteDocument / deleteDocumentsByProject call
+  sharepoint.deleteFile() instead of unlinkSync().
+- Download endpoint: proxy through sharepoint.downloadFile() instead of
+  reading from disk.
+- Admin → AI Settings: Add SharePoint configuration section (site URL,
+  root folder path). Stored in ai_settings table as new columns.
+
+Database Changes
+----------------
+Add to ai_settings table:
+  sharepointEnabled     boolean  default false
+  sharepointSiteUrl     text     (e.g. https://flipside.sharepoint.com/sites/PMGovernance)
+  sharepointFolderPath  text     (e.g. /Documents/Generated)
+
+No changes to stored_documents table — storagePath already stores a string,
+will store SharePoint item ID instead of local path when SharePoint is enabled.
+
+Microsoft Graph API Calls Required
+------------------------------------
+  POST /drives/{drive-id}/items/{folder-id}:/{filename}:/content   — upload
+  GET  /drives/{drive-id}/items/{item-id}/content                  — download
+  DELETE /drives/{drive-id}/items/{item-id}                        — delete
+  GET  /drives/{drive-id}/root:/{path}                             — resolve folder
+
+Authentication Flow
+-------------------
+Service account uses Client Credentials grant (app-only auth):
+  POST https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token
+  grant_type=client_credentials
+  client_id={app-id}
+  client_secret={app-secret}
+  scope=https://graph.microsoft.com/.default
+
+Token is cached in memory and refreshed when expired (1 hour TTL).
+
+What You Need to Set Up (Admin Steps)
+---------------------------------------
+1. Go to Azure Portal → Azure Active Directory → App Registrations → New
+2. Name: "PM Governance Tool"
+3. Supported account types: "Accounts in this organizational directory only"
+4. No redirect URI needed for service account flow
+5. Under API Permissions → Add:
+     Microsoft Graph → Application permissions:
+       Files.ReadWrite.All   (or Sites.ReadWrite.All for SharePoint sites)
+6. Grant admin consent for the permissions
+7. Under Certificates & Secrets → New client secret → copy the value
+8. Note your: Tenant ID, Application (client) ID, Client Secret
+9. Add to server .env:
+     MICROSOFT_TENANT_ID=your-tenant-id
+     MICROSOFT_CLIENT_ID=your-app-client-id
+     MICROSOFT_CLIENT_SECRET=your-client-secret
+10. In Admin → AI Settings → SharePoint section:
+     Enable SharePoint: on
+     Site URL: https://flipside.sharepoint.com/sites/your-site
+     Root folder: /Documents/Generated
+
+Fallback Behaviour
+------------------
+If SharePoint is not configured or upload fails, fall back to local disk
+storage and log a warning. This ensures generation never silently fails.
+
+Migration of Existing Documents
+--------------------------------
+A one-off migration script will:
+  - Read all stored_documents records with local storagePath values
+  - Upload each file to SharePoint
+  - Update storagePath to the SharePoint item ID
+  - Delete the local file
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 3 — SSO / SIGN IN WITH MICROSOFT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Goal
+----
+Allow users to log in with their Flipside M365 account instead of a
+username/password. Accounts are auto-provisioned on first login based on
+the user's M365 profile. Local accounts (for contractors etc.) remain
+supported alongside SSO.
+
+Authentication Flow
+-------------------
+OAuth 2.0 Authorization Code flow via Microsoft Identity Platform:
+
+1. User clicks "Sign in with Microsoft" on login page
+2. Browser redirects to:
+   https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/authorize
+   ?client_id={app-id}
+   &response_type=code
+   &redirect_uri=https://your-app.com/api/auth/microsoft/callback
+   &scope=openid profile email
+   &response_mode=query
+3. User authenticates with their M365 account
+4. Microsoft redirects back to /api/auth/microsoft/callback with a code
+5. Server exchanges code for tokens, extracts user profile (name, email,
+   M365 object ID)
+6. If user with that email exists → log them in
+7. If not → auto-create account with role "user", log them in
+8. Session created as normal — rest of app unchanged
+
+Tenant Restriction
+------------------
+Set allowed_tenants in the Azure app to your specific tenant ID so only
+@flipside.com (or your domain) accounts can sign in. Prevents random
+Microsoft personal accounts from logging in.
+
+What Changes in the Codebase
+-----------------------------
+- server/routes.ts: Add two new routes:
+    GET /api/auth/microsoft         — redirects to Microsoft login
+    GET /api/auth/microsoft/callback — handles OAuth callback
+- client/src/pages/login.tsx: Add "Sign in with Microsoft" button below
+  the existing form (or replace form entirely once SSO is confirmed working)
+- users table: Add column:
+    microsoftId  text  (M365 object ID, for matching on subsequent logins)
+- Users created via SSO have no password set (null) — they can only log in
+  via Microsoft unless an admin sets a password for them
+
+Database Changes
+----------------
+ALTER TABLE users ADD COLUMN microsoft_id text;
+(handled via drizzle-kit push after schema update)
+
+Coexistence with Local Accounts
+---------------------------------
+- Existing local accounts continue to work
+- If a local account email matches an M365 login, they are linked on first
+  SSO login (microsoftId is populated)
+- Admin can force SSO-only by removing passwords — or leave both active
+- A new admin setting "Require SSO" can disable local login entirely
+
+Azure App Registration Changes from Phase 2
+--------------------------------------------
+If Phase 2 was already set up, update the existing app registration:
+1. Add Redirect URI:
+   https://your-app.com/api/auth/microsoft/callback
+   (and http://localhost:5000/api/auth/microsoft/callback for dev)
+2. Add API Permissions (Delegated, not Application):
+   openid, profile, email (these are default and may already be present)
+3. No additional admin consent needed for these basic scopes
+
+What You Need to Set Up (Admin Steps)
+---------------------------------------
+(If Phase 2 already done, steps 1–8 are complete — just add the redirect URI)
+1-8. Same as Phase 2 Azure App Registration steps above
+9.   Add Redirect URI to the app registration (see above)
+10.  No new .env variables needed beyond Phase 2 ones
+11.  Deploy — "Sign in with Microsoft" button appears on login page automatically
+
+Rollout Recommendation
+-----------------------
+1. Deploy with both local and SSO login active
+2. Ask team to log in via Microsoft and confirm their accounts link correctly
+3. Once confirmed, optionally enable "Require SSO" in admin settings to
+   retire passwords for internal users
+4. Keep local login available for any non-M365 accounts (contractors)

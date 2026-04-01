@@ -724,6 +724,9 @@ export default function AdminPage() {
                 Back to Form
               </Button>
             </Link>
+            <Link href="/account">
+              <Button variant="outline" className="font-bold">My Account</Button>
+            </Link>
             <Button variant="ghost" className="font-bold" onClick={() => logout.mutate()}>
               Sign Out
             </Button>
