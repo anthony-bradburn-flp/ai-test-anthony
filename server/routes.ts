@@ -534,6 +534,26 @@ export async function registerRoutes(
     res.sendFile(fullPath, { root: "/" });
   });
 
+  app.get("/api/projects/:id/documents/download-all", requireAuth, async (req, res) => {
+    const docs = await storage.listDocuments(req.params.id);
+    const latest = docs.filter((d) => d.isLatest);
+    if (latest.length === 0) return res.status(404).json({ message: "No documents found" });
+    const zip = new JSZip();
+    for (const doc of latest) {
+      const fullPath = join(DATA_DIR, doc.storagePath);
+      if (existsSync(fullPath)) {
+        const { readFileSync } = await import("fs");
+        zip.file(doc.filename, readFileSync(fullPath));
+      }
+    }
+    const project = await storage.getProject(req.params.id);
+    const zipName = project ? `${project.sheetRef}_${project.clientName}_documents.zip` : "documents.zip";
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`);
+    res.setHeader("Content-Type", "application/zip");
+    res.send(buffer);
+  });
+
   app.delete("/api/documents/:id", requireAdmin, async (req, res) => {
     const doc = await storage.deleteDocument(req.params.id);
     if (!doc) return res.status(404).json({ message: "Not found" });
