@@ -68,6 +68,22 @@ export default function MyProjectsPage() {
     }
   };
 
+  const downloadAll = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/documents/download-all`);
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "documents.zip";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Failed to download documents");
+    }
+  };
+
   // Group docs by name, columns = versions
   const docsByName = docs.reduce<Record<string, StoredDocument[]>>((acc, d) => {
     if (!acc[d.name]) acc[d.name] = [];
@@ -156,9 +172,16 @@ export default function MyProjectsPage() {
                             <div className="p-4">
                               <div className="flex items-center justify-between mb-3">
                                 <p className="text-sm font-semibold">Documents</p>
-                                <Link href={`/?projectId=${project.id}`}>
-                                  <Button size="sm" className="font-bold">Generate Again</Button>
-                                </Link>
+                                <div className="flex gap-2">
+                                  {docs.length > 0 && (
+                                    <Button size="sm" variant="outline" className="font-bold" onClick={() => downloadAll(project.id)}>
+                                      <Download className="h-3.5 w-3.5 mr-1" /> Download All
+                                    </Button>
+                                  )}
+                                  <Link href={`/?projectId=${project.id}`}>
+                                    <Button size="sm" className="font-bold">Generate Again</Button>
+                                  </Link>
+                                </div>
                               </div>
                               {docs.length === 0 ? (
                                 <p className="text-sm text-muted-foreground">No documents stored yet.</p>
