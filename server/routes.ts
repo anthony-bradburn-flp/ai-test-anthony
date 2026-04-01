@@ -120,12 +120,44 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/auth/me", (req, res) => {
-    if (req.session.userId) {
-      res.json({ username: req.session.username, role: req.session.role });
-    } else {
-      res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/auth/me", async (req, res) => {
+    if (!req.session.userId) return res.status(401).json({ message: "Not authenticated" });
+    const user = await storage.getUser(req.session.userId);
+    if (!user) return res.status(401).json({ message: "Not authenticated" });
+    res.json({ id: user.id, username: user.username, role: user.role, email: user.email });
+  });
+
+  app.patch("/api/auth/me", requireAuth, async (req, res) => {
+    const { username, email } = req.body as { username?: string; email?: string };
+    if (!username?.trim()) return res.status(400).json({ error: "Username is required" });
+    const existing = await storage.getUserByUsername(username.trim());
+    if (existing && existing.id !== req.session.userId) {
+      return res.status(409).json({ error: "Username already taken" });
     }
+    const updated = await storage.updateUser(req.session.userId!, {
+      username: username.trim(),
+      email: email?.trim() || null,
+    });
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    req.session.username = updated.username;
+    res.json(updated);
+  });
+
+  app.patch("/api/auth/me/password", requireAuth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Current and new password are required" });
+    }
+    const user = await storage.getUser(req.session.userId!);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    const valid = await verifyPassword(currentPassword, user.password);
+    if (!valid) return res.status(401).json({ error: "Current password is incorrect" });
+    const { passwordSchema } = await import("@shared/schema");
+    const parsed = passwordSchema.safeParse(newPassword);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    const hash = await hashPassword(newPassword);
+    await storage.updateUserPassword(req.session.userId!, hash);
+    res.json({ ok: true });
   });
 
   // --- AI Settings ---
