@@ -1,5 +1,6 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { SiteLogo } from "@/components/page-header";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
@@ -101,10 +102,14 @@ function SectionCard({ id, title, badge, children }: { id: string; title: string
   );
 }
 
+type Client = { id: string; name: string };
+type Project = { id: string; clientId: string; clientName: string; projectName: string; sheetRef: string; projectType: string; projectSize: string; value: string; startDate: string; endDate: string; summary: string; sponsorName: string; sponsorRole: string; billingMilestones: { stage: string; percentage: number; date: string }[]; flipsideStakeholders: { name: string; role: string }[]; clientStakeholders: { name: string; role: string }[]; };
+
 export default function GovernanceStarterPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
   const logout = useLogout();
+  const queryClient = useQueryClient();
   const [uploads, setUploads] = useState<Array<{ name: string; content: string; size: number }>>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -116,6 +121,13 @@ export default function GovernanceStarterPage() {
   const [generatingStage, setGeneratingStage] = useState("");
   const [generatingStart, setGeneratingStart] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+
+  // Client / Project state
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [newClientName, setNewClientName] = useState("");
+  const [showNewClientInput, setShowNewClientInput] = useState(false);
+  const [versionModal, setVersionModal] = useState<{ open: boolean; onConfirm: (mode: "replace" | "new") => void } | null>(null);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
@@ -138,6 +150,30 @@ export default function GovernanceStarterPage() {
       return res.ok ? res.json() : [];
     },
     enabled: isAuthenticated,
+  });
+
+  const { data: clients = [] } = useQuery<Client[]>({
+    queryKey: ["/api/clients"],
+    queryFn: async () => { const res = await fetch("/api/clients"); return res.ok ? res.json() : []; },
+    enabled: isAuthenticated,
+  });
+
+  const { data: projects = [] } = useQuery<Project[]>({
+    queryKey: ["/api/projects", selectedClientId],
+    queryFn: async () => {
+      const url = selectedClientId ? `/api/projects?clientId=${selectedClientId}` : "/api/projects";
+      const res = await fetch(url);
+      return res.ok ? res.json() : [];
+    },
+    enabled: isAuthenticated && !!selectedClientId,
+  });
+
+  const createClientMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await fetch("/api/clients", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+      return res.json() as Promise<Client>;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/clients"] }),
   });
 
   // Elapsed timer while generating
@@ -243,13 +279,30 @@ export default function GovernanceStarterPage() {
     }
   }, [watchedProjectType, availablePackages, availableTemplates]);
 
+  const prefillFromProject = useCallback((project: Project) => {
+    form.setValue("client", project.clientName, { shouldValidate: false });
+    form.setValue("sheetRef", project.sheetRef, { shouldValidate: false });
+    form.setValue("projectName", project.projectName, { shouldValidate: false });
+    form.setValue("projectType", project.projectType, { shouldValidate: false });
+    form.setValue("projectSize", project.projectSize, { shouldValidate: false });
+    form.setValue("value", project.value, { shouldValidate: false });
+    form.setValue("startDate", project.startDate, { shouldValidate: false });
+    form.setValue("endDate", project.endDate, { shouldValidate: false });
+    form.setValue("summary", project.summary, { shouldValidate: false });
+    form.setValue("billingMilestones", project.billingMilestones, { shouldValidate: false });
+    form.setValue("flipsideStakeholders", project.flipsideStakeholders, { shouldValidate: false });
+    form.setValue("clientStakeholders", project.clientStakeholders, { shouldValidate: false });
+    const sponsorIdx = project.clientStakeholders.findIndex((s) => s.name === project.sponsorName);
+    form.setValue("sponsorIndex", sponsorIdx >= 0 ? sponsorIdx : 0, { shouldValidate: false });
+  }, [form]);
+
   const onInvalid = () => {
     toast.error("Some required fields are incomplete.", {
       description: "Please scroll through the form — fields highlighted in red need attention before you can generate documents.",
     });
   };
 
-  const onSubmit = async (values: FormValues) => {
+  const runGenerate = async (values: FormValues, projectId: string | undefined, versionMode: "replace" | "new") => {
     const payload = {
       client: values.client,
       sheetRef: values.sheetRef,
@@ -266,6 +319,8 @@ export default function GovernanceStarterPage() {
       sponsorIndex: values.sponsorIndex,
       docsRequired: values.docsRequired,
       supportingDocs: uploads.map((u) => ({ name: u.name, content: u.content })),
+      projectId,
+      versionMode,
     };
 
     const abortController = new AbortController();
@@ -288,7 +343,6 @@ export default function GovernanceStarterPage() {
         throw new Error(err.error ?? "Generation request failed");
       }
 
-      // Read the NDJSON stream — each line is a JSON event
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -300,7 +354,7 @@ export default function GovernanceStarterPage() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
-        buffer = lines.pop()!; // keep any incomplete trailing line
+        buffer = lines.pop()!;
 
         for (const line of lines) {
           if (!line.trim()) continue;
@@ -309,7 +363,7 @@ export default function GovernanceStarterPage() {
           if (event.type === "start") {
             totalExpected = event.count;
             setGeneratingStage(`Building ${totalExpected} document${totalExpected !== 1 ? "s" : ""}…`);
-            setGeneratedDocs([]); // open the results section immediately
+            setGeneratedDocs([]);
             if (event.truncatedDocs?.length) {
               for (const name of event.truncatedDocs) {
                 toast.warning(`${name} exceeds 15,000 character limit — only the first 15,000 characters were passed to the AI.`);
@@ -320,6 +374,7 @@ export default function GovernanceStarterPage() {
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document]);
           } else if (event.type === "done") {
+            if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`, {
               description: event.trainingDocAttached
                 ? "Training document standards applied."
@@ -343,6 +398,64 @@ export default function GovernanceStarterPage() {
       setIsGenerating(false);
     }
   };
+
+  const onSubmit = async (values: FormValues) => {
+    // Ensure client exists
+    let clientId = selectedClientId;
+    if (!clientId && values.client.trim()) {
+      const created = await createClientMutation.mutateAsync(values.client.trim());
+      clientId = created.id;
+      setSelectedClientId(clientId);
+    }
+
+    // Ensure project exists
+    let projectId = selectedProjectId || undefined;
+    if (!projectId && clientId) {
+      const sponsor = values.clientStakeholders[values.sponsorIndex] ?? values.clientStakeholders[0];
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId, clientName: values.client,
+          sheetRef: values.sheetRef, projectName: values.projectName,
+          projectType: values.projectType, projectSize: values.projectSize,
+          value: values.value, startDate: values.startDate, endDate: values.endDate,
+          summary: values.summary,
+          sponsorName: sponsor?.name ?? "", sponsorRole: sponsor?.role ?? "",
+          billingMilestones: values.billingMilestones,
+          flipsideStakeholders: values.flipsideStakeholders,
+          clientStakeholders: values.clientStakeholders,
+        }),
+      });
+      if (res.ok) {
+        const project = await res.json();
+        projectId = project.id;
+        setSelectedProjectId(project.id);
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
+      }
+    }
+
+    // If existing project already has docs, ask to replace or version
+    if (projectId && selectedProjectId) {
+      const docsRes = await fetch(`/api/projects/${projectId}/documents`);
+      const existingDocs = docsRes.ok ? await docsRes.json() : [];
+      if (existingDocs.length > 0) {
+        return new Promise<void>((resolve) => {
+          setVersionModal({
+            open: true,
+            onConfirm: async (mode) => {
+              setVersionModal(null);
+              await runGenerate(values, projectId, mode);
+              resolve();
+            },
+          });
+        });
+      }
+    }
+
+    await runGenerate(values, projectId, "replace");
+  };
+
 
   const handleDownload = async () => {
     if (!generatedDocs?.length) return;
@@ -408,6 +521,9 @@ export default function GovernanceStarterPage() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Link href="/my-projects">
+              <Button variant="outline" className="font-bold">My Projects</Button>
+            </Link>
             {user && (user.role === "admin" || user.role === "manager") ? (
               <Link href="/admin">
                 <Button variant="outline" className="font-bold">Admin</Button>
@@ -431,21 +547,78 @@ export default function GovernanceStarterPage() {
             {/* Section 1 */}
             <SectionCard id="s1" title="Section 1 – Project Information" badge="All fields mandatory">
               <div className="grid grid-cols-12 gap-3">
-                <FormField
-                  control={form.control}
-                  name="client"
-                  render={({ field }) => (
-                    <FormItem className="col-span-12 md:col-span-3">
-                      <FormLabel className="flex justify-between font-semibold">
-                        <span>Client <span className="text-destructive font-extrabold ml-1">*</span></span>
-                      </FormLabel>
-                      <FormControl>
-                        <Input placeholder="e.g. Acme Pharma" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
+                {/* Client select */}
+                <div className="col-span-12 md:col-span-3">
+                  <label className="text-sm font-semibold block mb-1.5">Client <span className="text-destructive font-extrabold ml-1">*</span></label>
+                  {showNewClientInput ? (
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="New client name"
+                        value={newClientName}
+                        onChange={(e) => setNewClientName(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            if (!newClientName.trim()) return;
+                            const c = await createClientMutation.mutateAsync(newClientName.trim());
+                            setSelectedClientId(c.id);
+                            form.setValue("client", c.name, { shouldValidate: false });
+                            setShowNewClientInput(false);
+                            setNewClientName("");
+                          }
+                        }}
+                      />
+                      <Button type="button" size="sm" onClick={async () => {
+                        if (!newClientName.trim()) return;
+                        const c = await createClientMutation.mutateAsync(newClientName.trim());
+                        setSelectedClientId(c.id);
+                        form.setValue("client", c.name, { shouldValidate: false });
+                        setShowNewClientInput(false);
+                        setNewClientName("");
+                      }}>Add</Button>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setShowNewClientInput(false)}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <Select
+                      value={selectedClientId}
+                      onValueChange={(val) => {
+                        if (val === "__new__") { setShowNewClientInput(true); return; }
+                        setSelectedClientId(val);
+                        setSelectedProjectId("");
+                        const c = clients.find((x) => x.id === val);
+                        if (c) form.setValue("client", c.name, { shouldValidate: false });
+                      }}
+                    >
+                      <SelectTrigger><SelectValue placeholder="Select or create client…" /></SelectTrigger>
+                      <SelectContent>
+                        {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                        <SelectItem value="__new__">+ New client</SelectItem>
+                      </SelectContent>
+                    </Select>
                   )}
-                />
+                  {form.formState.errors.client && <p className="text-destructive text-xs mt-1">{form.formState.errors.client.message}</p>}
+                </div>
+
+                {/* Project select */}
+                <div className="col-span-12 md:col-span-3">
+                  <label className="text-sm font-semibold block mb-1.5">Project</label>
+                  <Select
+                    value={selectedProjectId}
+                    onValueChange={(val) => {
+                      if (val === "__new__") { setSelectedProjectId(""); return; }
+                      setSelectedProjectId(val);
+                      const p = projects.find((x) => x.id === val);
+                      if (p) prefillFromProject(p);
+                    }}
+                    disabled={!selectedClientId}
+                  >
+                    <SelectTrigger><SelectValue placeholder={selectedClientId ? "Select or create new…" : "Select client first"} /></SelectTrigger>
+                    <SelectContent>
+                      {projects.map((p) => <SelectItem key={p.id} value={p.id}>{p.sheetRef} – {p.projectName}</SelectItem>)}
+                      <SelectItem value="__new__">+ New project</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 <FormField
                   control={form.control}
@@ -1198,6 +1371,27 @@ export default function GovernanceStarterPage() {
           </div>
         )}
       </main>
+
+      {/* Version modal */}
+      {versionModal?.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card rounded-xl border border-border shadow-xl p-6 max-w-sm w-full mx-4">
+            <h2 className="text-lg font-bold mb-2">This project already has documents</h2>
+            <p className="text-sm text-muted-foreground mb-6">Choose how to handle this generation run:</p>
+            <div className="grid gap-3">
+              <Button className="w-full font-bold" onClick={() => versionModal.onConfirm("replace")}>
+                Replace existing
+                <span className="ml-2 text-xs font-normal opacity-70">— overwrites current documents</span>
+              </Button>
+              <Button variant="outline" className="w-full font-bold" onClick={() => versionModal.onConfirm("new")}>
+                Save as new version
+                <span className="ml-2 text-xs font-normal opacity-70">— keeps history (v2, v3…)</span>
+              </Button>
+              <Button variant="ghost" className="w-full" onClick={() => setVersionModal(null)}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

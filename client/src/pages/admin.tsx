@@ -3,7 +3,7 @@ import { SiteLogo } from "@/components/page-header";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -579,6 +579,128 @@ export default function AdminPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  // Clients tab state
+  type AdminClient = { id: string; name: string; createdAt: string; createdBy: string };
+  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string };
+  type AdminStoredDoc = { id: string; projectId: string; name: string; filename: string; format: string; fileSize: number; generatedAt: string; version: number; versionLabel: string; isLatest: boolean };
+
+  const [showAddClient, setShowAddClient] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [editingClientId, setEditingClientId] = useState<string | null>(null);
+  const [editClientName, setEditClientName] = useState("");
+  const [projectClientFilter, setProjectClientFilter] = useState("__all__");
+  const [expandedAdminProject, setExpandedAdminProject] = useState<string | null>(null);
+
+  const { data: clientsData = [], isLoading: clientsLoading } = useQuery<AdminClient[]>({
+    queryKey: ["/api/clients"],
+    queryFn: async () => {
+      const res = await fetch("/api/clients");
+      return res.ok ? res.json() : [];
+    },
+  });
+
+  const { data: adminProjects = [], isLoading: adminProjectsLoading } = useQuery<AdminProject[]>({
+    queryKey: ["/api/projects"],
+    queryFn: async () => {
+      const res = await fetch("/api/projects");
+      return res.ok ? res.json() : [];
+    },
+  });
+
+  const { data: adminExpandedDocs = [] } = useQuery<AdminStoredDoc[]>({
+    queryKey: ["/api/projects", expandedAdminProject, "documents"],
+    queryFn: async () => {
+      if (!expandedAdminProject) return [];
+      const res = await fetch(`/api/projects/${expandedAdminProject}/documents`);
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!expandedAdminProject,
+  });
+
+  const createClientMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to create client"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setShowAddClient(false);
+      setNewClientName("");
+      toast.success("Client created");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const updateClientMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const res = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to update client"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setEditingClientId(null);
+      toast.success("Client updated");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteClientMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/clients/${id}`, { method: "DELETE" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to delete client"); }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast.success("Client deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteProjectMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to delete project"); }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      if (expandedAdminProject) setExpandedAdminProject(null);
+      toast.success("Project deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const downloadAdminDoc = async (doc: AdminStoredDoc) => {
+    try {
+      const res = await fetch(`/api/documents/${doc.id}/download`);
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = doc.filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Failed to download document");
+    }
+  };
+
+  const filteredAdminProjects = adminProjects.filter((p) =>
+    projectClientFilter === "__all__" || p.clientId === projectClientFilter
+  );
+
+  const projectsPerClient = adminProjects.reduce<Record<string, number>>((acc, p) => {
+    acc[p.clientId] = (acc[p.clientId] || 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <div className="min-h-dvh bg-background text-foreground font-sans selection:bg-primary/30">
@@ -611,7 +733,7 @@ export default function AdminPage() {
 
       <main className="mx-auto max-w-[1100px] px-[18px] pb-[42px] pt-8">
         <Tabs defaultValue="packages" className="w-full">
-          <TabsList className="grid w-full grid-cols-4 max-w-[800px] mb-8 bg-muted/40 p-1 rounded-[10px] h-auto border border-border/50">
+          <TabsList className="grid w-full grid-cols-6 mb-8 bg-muted/40 p-1 rounded-[10px] h-auto border border-border/50">
             <TabsTrigger value="packages" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
               <Package className="h-4 w-4 mr-2" />
               Packages
@@ -619,6 +741,14 @@ export default function AdminPage() {
             <TabsTrigger value="templates" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
               <FileText className="h-4 w-4 mr-2" />
               Templates
+            </TabsTrigger>
+            <TabsTrigger value="clients" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
+              <Building2 className="h-4 w-4 mr-2" />
+              Clients
+            </TabsTrigger>
+            <TabsTrigger value="projects" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
+              <FolderOpen className="h-4 w-4 mr-2" />
+              Projects
             </TabsTrigger>
             <TabsTrigger value="users" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
               <Users className="h-4 w-4 mr-2" />
@@ -1175,6 +1305,192 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
+            </SectionCard>
+          </TabsContent>
+
+          <TabsContent value="clients" className="space-y-6">
+            <SectionCard
+              title="Clients"
+              description="Manage client organisations linked to projects."
+              action={
+                !showAddClient && (
+                  <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setShowAddClient(true)}>
+                    <Plus className="h-4 w-4 mr-1" /> Add Client
+                  </Button>
+                )
+              }
+            >
+              {showAddClient && (
+                <form
+                  onSubmit={(e) => { e.preventDefault(); if (newClientName.trim()) createClientMutation.mutate(newClientName.trim()); }}
+                  className="p-5 border-b border-border space-y-3 bg-muted/20"
+                >
+                  <h3 className="text-sm font-semibold">New Client</h3>
+                  <div className="flex gap-2 items-end">
+                    <div className="space-y-1.5 flex-1">
+                      <Label htmlFor="new-client-name">Client Name <span className="text-destructive">*</span></Label>
+                      <Input id="new-client-name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} placeholder="e.g. Acme Corp" required />
+                    </div>
+                    <Button type="submit" size="sm" className="font-bold" disabled={createClientMutation.isPending}>
+                      {createClientMutation.isPending ? "Creating…" : "Create"}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => { setShowAddClient(false); setNewClientName(""); }}>Cancel</Button>
+                  </div>
+                </form>
+              )}
+              {clientsLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
+              ) : clientsData.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">No clients yet. Add one above.</div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted">
+                    <TableRow>
+                      <TableHead className="font-bold text-foreground">Name</TableHead>
+                      <TableHead className="font-bold text-foreground">Projects</TableHead>
+                      <TableHead className="font-bold text-foreground">Created</TableHead>
+                      <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {clientsData.map((client) => {
+                      if (editingClientId === client.id) {
+                        return (
+                          <TableRow key={client.id}>
+                            <TableCell colSpan={4}>
+                              <form
+                                onSubmit={(e) => { e.preventDefault(); if (editClientName.trim()) updateClientMutation.mutate({ id: client.id, name: editClientName.trim() }); }}
+                                className="flex gap-2 items-center"
+                              >
+                                <Input value={editClientName} onChange={(e) => setEditClientName(e.target.value)} className="max-w-xs" required />
+                                <Button type="submit" size="sm" className="font-bold" disabled={updateClientMutation.isPending}>
+                                  {updateClientMutation.isPending ? "Saving…" : "Save"}
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setEditingClientId(null)}>Cancel</Button>
+                              </form>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      }
+                      return (
+                        <TableRow key={client.id}>
+                          <TableCell className="font-medium">{client.name}</TableCell>
+                          <TableCell className="text-muted-foreground">{projectsPerClient[client.id] ?? 0}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm">{new Date(client.createdAt).toLocaleDateString("en-GB")}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => { setEditingClientId(client.id); setEditClientName(client.name); }}>
+                                <Edit2 className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => { if (confirm(`Delete client "${client.name}"? This will not delete associated projects.`)) deleteClientMutation.mutate(client.id); }}
+                                disabled={deleteClientMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </SectionCard>
+          </TabsContent>
+
+          <TabsContent value="projects" className="space-y-6">
+            <SectionCard
+              title="All Projects"
+              description="View and manage all generated projects across all clients."
+              action={
+                clientsData.length > 0 ? (
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-medium"
+                    value={projectClientFilter}
+                    onChange={(e) => setProjectClientFilter(e.target.value)}
+                  >
+                    <option value="__all__">All clients</option>
+                    {clientsData.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                ) : undefined
+              }
+            >
+              {adminProjectsLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
+              ) : filteredAdminProjects.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">No projects found.</div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted">
+                    <TableRow>
+                      <TableHead className="w-8"></TableHead>
+                      <TableHead className="font-bold text-foreground">Sheet Ref</TableHead>
+                      <TableHead className="font-bold text-foreground">Project Name</TableHead>
+                      <TableHead className="font-bold text-foreground">Client</TableHead>
+                      <TableHead className="font-bold text-foreground">Type</TableHead>
+                      <TableHead className="font-bold text-foreground">Last Generated</TableHead>
+                      <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAdminProjects.map((project) => {
+                      const isExpanded = expandedAdminProject === project.id;
+                      return (
+                        <>
+                          <TableRow key={project.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setExpandedAdminProject(isExpanded ? null : project.id)}>
+                            <TableCell>{isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</TableCell>
+                            <TableCell className="font-mono text-sm">{project.sheetRef}</TableCell>
+                            <TableCell className="font-medium">{project.projectName}</TableCell>
+                            <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
+                            <TableCell className="text-muted-foreground">{project.projectType}</TableCell>
+                            <TableCell className="text-muted-foreground text-sm">
+                              {project.lastGeneratedAt ? new Date(project.lastGeneratedAt).toLocaleDateString("en-GB") : "—"}
+                            </TableCell>
+                            <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => { if (confirm(`Delete project "${project.projectName}" and all its stored documents?`)) deleteProjectMutation.mutate(project.id); }}
+                                disabled={deleteProjectMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          {isExpanded && (
+                            <TableRow key={`${project.id}-docs`}>
+                              <TableCell colSpan={7} className="p-0 bg-muted/30">
+                                <div className="p-4">
+                                  <p className="text-sm font-semibold mb-2">Stored Documents</p>
+                                  {adminExpandedDocs.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No documents stored for this project.</p>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                      {adminExpandedDocs.map((doc) => (
+                                        <Button
+                                          key={doc.id}
+                                          size="sm"
+                                          variant={doc.isLatest ? "default" : "outline"}
+                                          className="h-7 text-xs font-semibold"
+                                          onClick={() => downloadAdminDoc(doc)}
+                                        >
+                                          <Download className="h-3 w-3 mr-1" />
+                                          {doc.name} v{doc.version}
+                                        </Button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </SectionCard>
           </TabsContent>
 
