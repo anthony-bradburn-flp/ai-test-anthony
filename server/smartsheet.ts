@@ -226,19 +226,36 @@ export async function createTimelineSheet(
 }
 
 /**
- * Update an existing timeline sheet by replacing all data rows.
+ * Update an existing timeline sheet, or recreate it if the column structure is
+ * incompatible (e.g. old TEXT_NUMBER dates, missing Predecessor column).
+ * Returns the sheet ID and URL — which may differ from the input if the sheet
+ * was recreated.
  */
-export async function updateTimelineSheet(
-  sheetId: string,
-  tasks: TimelineTask[]
-): Promise<void> {
+export async function upsertTimeline(
+  existingSheetId: string,
+  project: Project,
+  tasks: TimelineTask[],
+  workspaceId?: string | null
+): Promise<TimelineResult> {
   const client = getClient();
-  const numericSheetId = Number(sheetId);
+  const numericSheetId = Number(existingSheetId);
 
   const sheet = await client.sheets.getSheet({ sheetId: numericSheetId });
-  const colMap = buildColMap(sheet.columns ?? []);
-  const existingRows: any[] = sheet.rows ?? [];
+  const columns: any[] = sheet.columns ?? [];
+  const colMap = buildColMap(columns);
 
+  // Detect old column structure: missing Predecessor column or Start Date is not DATE type
+  const startDateCol = columns.find((c: any) => c.title === "Start Date");
+  const compatible = !!colMap["Predecessor"] && startDateCol?.type === "DATE";
+
+  if (!compatible) {
+    console.log(`[timeline] Sheet ${existingSheetId} has incompatible structure — deleting and recreating with Gantt support`);
+    try { await client.sheets.deleteSheet({ sheetId: numericSheetId }); } catch (_) { /* orphaned sheet is fine */ }
+    return createTimelineSheet(project, tasks, workspaceId);
+  }
+
+  // Compatible — delete all rows and rewrite
+  const existingRows: any[] = sheet.rows ?? [];
   if (existingRows.length > 0) {
     const rowIds = existingRows.map((r: any) => r.id);
     for (let i = 0; i < rowIds.length; i += 450) {
@@ -250,6 +267,9 @@ export async function updateTimelineSheet(
   }
 
   await writeTaskRowsWithHierarchy(client, numericSheetId, colMap, tasks);
+
+  const permalink: string = sheet.permalink ?? `https://app.smartsheet.com/sheets/${existingSheetId}`;
+  return { sheetId: existingSheetId, sheetUrl: permalink };
 }
 
 /** Enable dependency tracking (Gantt) on the sheet. */
