@@ -284,12 +284,12 @@ async function enableGanttSettings(
   client: ReturnType<typeof smartsheetLib.createClient>,
   numericSheetId: number
 ): Promise<void> {
+  // workingDays is 7 booleans: Mon Tue Wed Thu Fri Sat Sun
   await client.sheets.updateSheet({
     sheetId: numericSheetId,
     body: {
       projectSettings: {
-        nonWorkingDays: [],
-        workingDays: [1, 2, 3, 4, 5],
+        workingDays: [true, true, true, true, true, false, false],
         lengthOfDay: 8,
         useResourceAllocation: false,
       },
