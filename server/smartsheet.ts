@@ -210,10 +210,7 @@ export async function createTimelineSheet(
   const numericSheetId: number = Number(sheet.result?.id ?? sheet.id);
   const sheetId: string = String(numericSheetId);
 
-  // Enable Gantt / dependency tracking first — Smartsheet may add columns
-  await enableGanttSettings(client, numericSheetId);
-
-  // Fetch columns AFTER enabling Gantt settings so any auto-added columns are included
+  // Fetch columns to build the name→id map
   const sheetDetails = await client.sheets.getSheet({ sheetId: numericSheetId });
   const colMap = buildColMap(sheetDetails.columns ?? []);
 
@@ -251,9 +248,9 @@ export async function upsertTimeline(
   const columns: any[] = sheet.columns ?? [];
   const colMap = buildColMap(columns);
 
-  // Detect old column structure: missing Predecessor column or Start Date is not DATE type
+  // Detect old column structure: Start Date must be DATE type (not TEXT_NUMBER from older sheets)
   const startDateCol = columns.find((c: any) => c.title === "Start Date");
-  const compatible = !!colMap["Predecessor"] && startDateCol?.type === "DATE";
+  const compatible = startDateCol?.type === "DATE";
 
   if (!compatible) {
     console.log(`[timeline] Sheet ${existingSheetId} has incompatible structure — deleting and recreating with Gantt support`);
@@ -277,33 +274,6 @@ export async function upsertTimeline(
 
   const permalink: string = sheet.permalink ?? `https://app.smartsheet.com/sheets/${existingSheetId}`;
   return { sheetId: existingSheetId, sheetUrl: permalink };
-}
-
-/** Enable dependency tracking (Gantt) on the sheet.
- *
- * dependenciesEnabled must live inside projectSettings (not at the sheet root).
- * This single call enables Gantt mode and Smartsheet auto-adds the Predecessor column.
- */
-async function enableGanttSettings(
-  client: ReturnType<typeof smartsheetLib.createClient>,
-  numericSheetId: number
-): Promise<void> {
-  try {
-    await client.sheets.updateSheet({
-      sheetId: numericSheetId,
-      body: {
-        projectSettings: {
-          dependenciesEnabled: true,
-          workingDays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
-          lengthOfDay: 8,
-        },
-      },
-    });
-    console.log("[timeline] Gantt/dependency settings enabled");
-  } catch (err: any) {
-    // Non-fatal: sheet structure is still valid with DATE columns; user can enable Gantt manually
-    console.warn("[timeline] Could not enable Gantt settings:", err?.message ?? err);
-  }
 }
 
 /**
