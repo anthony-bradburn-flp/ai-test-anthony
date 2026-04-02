@@ -284,17 +284,21 @@ async function enableGanttSettings(
   client: ReturnType<typeof smartsheetLib.createClient>,
   numericSheetId: number
 ): Promise<void> {
-  // workingDays is 7 booleans: Mon Tue Wed Thu Fri Sat Sun
-  await client.sheets.updateSheet({
-    sheetId: numericSheetId,
-    body: {
-      projectSettings: {
-        workingDays: [true, true, true, true, true, false, false],
-        lengthOfDay: 8,
-        useResourceAllocation: false,
+  try {
+    // workingDays must be an array of day-name strings (Smartsheet API requirement)
+    await client.sheets.updateSheet({
+      sheetId: numericSheetId,
+      body: {
+        projectSettings: {
+          workingDays: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+          lengthOfDay: 8,
+        },
       },
-    },
-  });
+    });
+  } catch (err: any) {
+    // Non-fatal: sheet still works, just without Gantt dependency tracking
+    console.warn("[timeline] Could not enable Gantt project settings:", err?.message ?? err);
+  }
 }
 
 /**
