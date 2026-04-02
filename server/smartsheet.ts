@@ -81,7 +81,7 @@ export async function generateTimelineTasks(
     if (!key) throw new Error("OpenAI API key not configured");
     const client = new OpenAI({ apiKey: key, timeout: 60_000 });
     const resp = await client.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-5.2",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
     });
