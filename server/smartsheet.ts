@@ -240,7 +240,13 @@ export async function upsertTimeline(
   const client = getClient();
   const numericSheetId = Number(existingSheetId);
 
-  const sheet = await client.sheets.getSheet({ sheetId: numericSheetId });
+  let sheet: any;
+  try {
+    sheet = await client.sheets.getSheet({ sheetId: numericSheetId });
+  } catch (_) {
+    // Sheet was deleted externally — create a fresh one
+    return createTimelineSheet(project, tasks, workspaceId);
+  }
   const columns: any[] = sheet.columns ?? [];
   const colMap = buildColMap(columns);
 
