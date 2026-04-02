@@ -174,7 +174,7 @@ export async function createTimelineSheet(
 
   let sheet: any;
   if (workspaceId) {
-    sheet = await client.workspaces.createSheetInWorkspace({
+    sheet = await client.sheets.createSheetInWorkspace({
       workspaceId,
       body: { name: sheetName, columns },
     });
