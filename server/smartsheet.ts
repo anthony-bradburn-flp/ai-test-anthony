@@ -18,13 +18,14 @@ import OpenAI from "openai";
 import { getSmartsheetKey, getAnthropicKey, getOpenAIKey } from "./secrets";
 import type { Project } from "../shared/schema";
 
-// Column definitions for new sheets
+// Column definitions for new sheets.
+// NOTE: Do NOT include a Predecessor column here — Smartsheet automatically
+// adds a system-managed "Predecessor" column when project settings are enabled.
 const COLUMNS = [
   { title: "Task Name",       type: "TEXT_NUMBER", primary: true  },
   { title: "Start Date",      type: "DATE",        primary: false },
   { title: "End Date",        type: "DATE",        primary: false },
   { title: "Duration (days)", type: "TEXT_NUMBER", primary: false },
-  { title: "Predecessor",     type: "PREDECESSOR", primary: false },
   { title: "Owner",           type: "TEXT_NUMBER", primary: false },
   { title: "Status",          type: "TEXT_NUMBER", primary: false },
   { title: "Notes",           type: "TEXT_NUMBER", primary: false },
