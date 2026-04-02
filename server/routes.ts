@@ -15,7 +15,7 @@ import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, DATA_DIR } from "./storage";
 import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey, hasSmartsheetKey } from "./secrets";
-import { verifySmartsheetConnection, generateTimelineTasks, createTimelineSheet, updateTimelineSheet } from "./smartsheet";
+import { verifySmartsheetConnection, generateTimelineTasks, createTimelineSheet, upsertTimeline } from "./smartsheet";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
 const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
@@ -631,15 +631,14 @@ export async function registerRoutes(
 
       let sheetId = project.smartsheetId;
       let sheetUrl = project.smartsheetUrl ?? "";
-      const mode: "update" | "new" = req.body?.mode === "new" ? "new" : (sheetId ? "update" : "new");
 
-      if (mode === "update" && sheetId) {
-        await updateTimelineSheet(sheetId, tasks);
-      } else {
-        const result = await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
-        sheetId = result.sheetId;
-        sheetUrl = result.sheetUrl;
-      }
+      const result = sheetId
+        ? await upsertTimeline(sheetId, project, tasks, settings.smartsheetWorkspaceId)
+        : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+      sheetId = result.sheetId;
+      sheetUrl = result.sheetUrl;
+
+      const mode = sheetId === project.smartsheetId ? "update" : "new";
 
       const newVersion = (project.timelineVersion ?? 0) + (mode === "new" ? 1 : 0);
       await storage.updateProject(project.id, {
@@ -1061,15 +1060,11 @@ export async function registerRoutes(
               if (project) {
                 const tasks = await generateTimelineTasks(project, settings);
                 const existing = project.smartsheetId;
-                let sheetId = existing;
-                let sheetUrl = project.smartsheetUrl ?? "";
-                if (existing && versionMode === "replace") {
-                  await updateTimelineSheet(existing, tasks);
-                } else {
-                  const result = await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
-                  sheetId = result.sheetId;
-                  sheetUrl = result.sheetUrl;
-                }
+                const tlResult = existing
+                  ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
+                  : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+                let sheetId = tlResult.sheetId;
+                let sheetUrl = tlResult.sheetUrl;
                 const newVersion = (project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0);
                 await storage.updateProject(projectId, {
                   smartsheetId: sheetId ?? undefined,
