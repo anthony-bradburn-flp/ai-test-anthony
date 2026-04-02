@@ -174,7 +174,7 @@ export async function createTimelineSheet(
 
   let sheet: any;
   if (workspaceId) {
-    sheet = await client.workspaces.createSheetInWorkspace({
+    sheet = await client.sheets.createSheetInWorkspace({
       workspaceId,
       body: { name: sheetName, columns },
     });
@@ -182,16 +182,17 @@ export async function createTimelineSheet(
     sheet = await client.sheets.createSheet({ body: { name: sheetName, columns } });
   }
 
-  const sheetId: string = String(sheet.result?.id ?? sheet.id);
+  const numericSheetId: number = Number(sheet.result?.id ?? sheet.id);
+  const sheetId: string = String(numericSheetId);
 
   // Fetch the sheet to get column IDs
-  const sheetDetails = await client.sheets.getSheet({ id: sheetId });
+  const sheetDetails = await client.sheets.getSheet({ id: numericSheetId });
   const colIds: number[] = (sheetDetails.columns ?? []).map((c: any) => c.id);
 
-  await writeTaskRows(client, sheetId, colIds, tasks);
+  await writeTaskRows(client, numericSheetId, colIds, tasks);
 
   // Retrieve the permalink
-  const finalSheet = await client.sheets.getSheet({ id: sheetId });
+  const finalSheet = await client.sheets.getSheet({ id: numericSheetId });
   const sheetUrl: string = finalSheet.permalink ?? `https://app.smartsheet.com/sheets/${sheetId}`;
 
   return { sheetId, sheetUrl };
@@ -205,9 +206,10 @@ export async function updateTimelineSheet(
   tasks: TimelineTask[]
 ): Promise<void> {
   const client = getClient();
+  const numericSheetId = Number(sheetId);
 
   // Get current rows and column IDs
-  const sheet = await client.sheets.getSheet({ id: sheetId });
+  const sheet = await client.sheets.getSheet({ id: numericSheetId });
   const colIds: number[] = (sheet.columns ?? []).map((c: any) => c.id);
   const existingRows: any[] = sheet.rows ?? [];
 
@@ -217,18 +219,18 @@ export async function updateTimelineSheet(
     // Smartsheet delete accepts up to 450 row IDs at a time
     for (let i = 0; i < rowIds.length; i += 450) {
       await client.sheets.deleteRows({
-        sheetId,
+        sheetId: numericSheetId,
         body: { ids: rowIds.slice(i, i + 450) },
       });
     }
   }
 
-  await writeTaskRows(client, sheetId, colIds, tasks);
+  await writeTaskRows(client, numericSheetId, colIds, tasks);
 }
 
 async function writeTaskRows(
   client: ReturnType<typeof smartsheetLib.createClient>,
-  sheetId: string,
+  sheetId: number,
   colIds: number[],
   tasks: TimelineTask[]
 ): Promise<void> {
@@ -248,10 +250,10 @@ async function writeTaskRows(
     ].filter((_, i) => colIds[i] !== undefined),
   }));
 
-  // Add up to 500 rows at a time
+  // Add up to 500 rows at a time (sheetId must be numeric)
   for (let i = 0; i < rows.length; i += 500) {
     await client.sheets.addRows({
-      sheetId,
+      sheetId: Number(sheetId),
       body: rows.slice(i, i + 500),
     });
   }
