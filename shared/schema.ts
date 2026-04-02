@@ -60,6 +60,7 @@ export const aiSettingsTable = pgTable("ai_settings", {
   trainingDocFilename: text("training_doc_filename"),
   trainingDocUploadedAt: text("training_doc_uploaded_at"),
   trainingDocSize: integer("training_doc_size"),
+  smartsheetWorkspaceId: text("smartsheet_workspace_id"),
 });
 
 // ---- Clients ----
@@ -91,6 +92,10 @@ export const projectsTable = pgTable("projects", {
   createdAt: text("created_at").notNull(),
   createdBy: text("created_by").notNull(),
   lastGeneratedAt: text("last_generated_at"),
+  smartsheetId: text("smartsheet_id"),
+  smartsheetUrl: text("smartsheet_url"),
+  timelineGeneratedAt: text("timeline_generated_at"),
+  timelineVersion: integer("timeline_version").notNull().default(0),
 });
 
 // ---- Stored Documents ----
@@ -111,6 +116,7 @@ export const storedDocumentsTable = pgTable("stored_documents", {
 });
 
 // Derived types
+export type AiSettings = typeof aiSettingsTable.$inferSelect;
 export type Client = typeof clientsTable.$inferSelect;
 export type Project = typeof projectsTable.$inferSelect;
 export type StoredDocument = typeof storedDocumentsTable.$inferSelect;

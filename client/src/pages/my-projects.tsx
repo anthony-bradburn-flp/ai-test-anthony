@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SiteLogo } from "@/components/page-header";
 import { useAuth, useLogout } from "@/hooks/use-auth";
@@ -7,12 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ChevronDown, ChevronRight, Download, FileText } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, FileText, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 type Project = {
   id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
   projectType: string; createdAt: string; lastGeneratedAt?: string;
+  smartsheetId?: string | null; smartsheetUrl?: string | null; timelineGeneratedAt?: string | null;
 };
 type StoredDocument = {
   id: string; projectId: string; name: string; filename: string; format: string;
@@ -22,11 +23,21 @@ type StoredDocument = {
 export default function MyProjectsPage() {
   const { user } = useAuth();
   const logout = useLogout();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [clientFilter, setClientFilter] = useState("__all__");
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  const [timelinePending, setTimelinePending] = useState<string | null>(null);
 
   const isAdmin = user?.role === "admin" || user?.role === "manager";
+
+  const { data: smartsheetEnabled } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/smartsheet/enabled"],
+    queryFn: async () => {
+      const res = await fetch("/api/smartsheet/enabled");
+      return res.ok ? res.json() : { enabled: false };
+    },
+  });
 
   const { data: projects = [] } = useQuery<Project[]>({
     queryKey: ["/api/projects/mine"],
@@ -81,6 +92,31 @@ export default function MyProjectsPage() {
       URL.revokeObjectURL(url);
     } catch {
       toast.error("Failed to download documents");
+    }
+  };
+
+  const generateTimeline = async (project: Project, mode: "update" | "new" = project.smartsheetId ? "update" : "new") => {
+    setTimelinePending(project.id);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/timeline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
+      toast.success(mode === "update" ? "Timeline updated" : "Timeline created", {
+        description: (
+          <a href={data.sheetUrl} target="_blank" rel="noopener noreferrer" className="underline">
+            Open in Smartsheet →
+          </a>
+        ) as any,
+      });
+    } catch (err: any) {
+      toast.error("Timeline generation failed", { description: err?.message });
+    } finally {
+      setTimelinePending(null);
     }
   };
 
@@ -173,11 +209,29 @@ export default function MyProjectsPage() {
                             <div className="p-4">
                               <div className="flex items-center justify-between mb-3">
                                 <p className="text-sm font-semibold">Documents</p>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 flex-wrap justify-end">
                                   {docs.length > 0 && (
                                     <Button size="sm" variant="outline" className="font-bold" onClick={() => downloadAll(project.id)}>
                                       <Download className="h-3.5 w-3.5 mr-1" /> Download All
                                     </Button>
+                                  )}
+                                  {smartsheetEnabled?.enabled && (
+                                    project.smartsheetId ? (
+                                      <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "update")}>
+                                        <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Updating…" : "Update Timeline"}
+                                      </Button>
+                                    ) : (
+                                      <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "new")}>
+                                        <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Creating…" : "Create Timeline"}
+                                      </Button>
+                                    )
+                                  )}
+                                  {project.smartsheetUrl && (
+                                    <a href={project.smartsheetUrl} target="_blank" rel="noopener noreferrer">
+                                      <Button size="sm" variant="ghost" className="font-bold">
+                                        <ExternalLink className="h-3.5 w-3.5 mr-1" /> View Sheet
+                                      </Button>
+                                    </a>
                                   )}
                                   <Link href={`/?projectId=${project.id}`}>
                                     <Button size="sm" className="font-bold">Generate Again</Button>

@@ -30,6 +30,7 @@ export type AiSettings = {
   trainingDocFilename: string | null;
   trainingDocUploadedAt: string | null;
   trainingDocSize: number | null;
+  smartsheetWorkspaceId: string | null;
 };
 
 const DEFAULT_SYSTEM_PROMPT = `You are an expert project management consultant and delivery governance specialist embedded in a PM Governance Tool. Your role is to generate professional, accurate, and contextually relevant project documents based on intake form data, supporting materials provided by the project team, and your knowledge of best practices from similar project types.
@@ -146,7 +147,7 @@ export interface IStorage {
   // Projects
   listProjects(clientId?: string, createdBy?: string): Promise<Project[]>;
   getProject(id: string): Promise<Project | undefined>;
-  createProject(data: Omit<Project, "id" | "createdAt">): Promise<Project>;
+  createProject(data: Omit<Project, "id" | "createdAt" | "lastGeneratedAt" | "smartsheetId" | "smartsheetUrl" | "timelineGeneratedAt" | "timelineVersion"> & { lastGeneratedAt?: string | null; smartsheetId?: string | null; smartsheetUrl?: string | null; timelineGeneratedAt?: string | null; timelineVersion?: number }): Promise<Project>;
   updateProject(id: string, fields: Partial<Project>): Promise<Project | undefined>;
   deleteProject(id: string): Promise<void>;
   // Stored Documents
@@ -319,15 +320,24 @@ class DbStorage implements IStorage {
       trainingDocFilename: row?.trainingDocFilename ?? null,
       trainingDocUploadedAt: row?.trainingDocUploadedAt ?? null,
       trainingDocSize: row?.trainingDocSize ?? null,
+      smartsheetWorkspaceId: row?.smartsheetWorkspaceId ?? null,
     };
   }
 
   async updateAiSettings(settings: Partial<AiSettings>): Promise<AiSettings> {
     const current = await this.getAiSettings();
     const merged = { ...current, ...settings };
-    await db.insert(aiSettingsTable)
-      .values({ id: 1, systemPrompt: merged.systemPrompt, companyName: merged.companyName, trainingDocContent: merged.trainingDocContent, trainingDocFilename: merged.trainingDocFilename, trainingDocUploadedAt: merged.trainingDocUploadedAt, trainingDocSize: merged.trainingDocSize })
-      .onConflictDoUpdate({ target: aiSettingsTable.id, set: { systemPrompt: merged.systemPrompt, companyName: merged.companyName, trainingDocContent: merged.trainingDocContent, trainingDocFilename: merged.trainingDocFilename, trainingDocUploadedAt: merged.trainingDocUploadedAt, trainingDocSize: merged.trainingDocSize } });
+    const dbFields = {
+      id: 1,
+      systemPrompt: merged.systemPrompt,
+      companyName: merged.companyName,
+      trainingDocContent: merged.trainingDocContent,
+      trainingDocFilename: merged.trainingDocFilename,
+      trainingDocUploadedAt: merged.trainingDocUploadedAt,
+      trainingDocSize: merged.trainingDocSize,
+      smartsheetWorkspaceId: merged.smartsheetWorkspaceId,
+    };
+    await db.insert(aiSettingsTable).values(dbFields).onConflictDoUpdate({ target: aiSettingsTable.id, set: dbFields });
     return merged;
   }
 
@@ -373,8 +383,17 @@ class DbStorage implements IStorage {
     return rows[0];
   }
 
-  async createProject(data: Omit<Project, "id" | "createdAt">): Promise<Project> {
-    const row = { ...data, id: randomUUID(), createdAt: new Date().toISOString() };
+  async createProject(data: Parameters<IStorage["createProject"]>[0]): Promise<Project> {
+    const row = {
+      ...data,
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+      lastGeneratedAt: data.lastGeneratedAt ?? null,
+      smartsheetId: data.smartsheetId ?? null,
+      smartsheetUrl: data.smartsheetUrl ?? null,
+      timelineGeneratedAt: data.timelineGeneratedAt ?? null,
+      timelineVersion: data.timelineVersion ?? 0,
+    };
     await db.insert(projectsTable).values(row);
     return row;
   }
