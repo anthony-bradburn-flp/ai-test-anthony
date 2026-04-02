@@ -279,13 +279,28 @@ export async function upsertTimeline(
   return { sheetId: existingSheetId, sheetUrl: permalink };
 }
 
-/** Enable dependency tracking (Gantt) on the sheet. */
+/** Enable dependency tracking (Gantt) on the sheet.
+ *
+ * Smartsheet requires two separate calls:
+ *   1. Enable dependencies (this causes Smartsheet to auto-add the Predecessor column)
+ *   2. Set working days / day length (only valid after dependencies are enabled)
+ */
 async function enableGanttSettings(
   client: ReturnType<typeof smartsheetLib.createClient>,
   numericSheetId: number
 ): Promise<void> {
   try {
-    // workingDays must be an array of day-name strings (Smartsheet API requirement)
+    // Step 1 — enable dependencies; Smartsheet auto-adds Predecessor column
+    await client.sheets.updateSheet({
+      sheetId: numericSheetId,
+      body: { projectSettings: { dependencyEnabled: true } },
+    });
+  } catch (err: any) {
+    console.warn("[timeline] Could not enable dependencies:", err?.message ?? err);
+    return; // no point continuing if step 1 failed
+  }
+  try {
+    // Step 2 — set working days now that dependencies are enabled
     await client.sheets.updateSheet({
       sheetId: numericSheetId,
       body: {
@@ -296,8 +311,8 @@ async function enableGanttSettings(
       },
     });
   } catch (err: any) {
-    // Non-fatal: sheet still works, just without Gantt dependency tracking
-    console.warn("[timeline] Could not enable Gantt project settings:", err?.message ?? err);
+    // Non-fatal — Predecessor column is already added; working days are cosmetic
+    console.warn("[timeline] Could not set working days:", err?.message ?? err);
   }
 }
 

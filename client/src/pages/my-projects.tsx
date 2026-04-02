@@ -100,7 +100,7 @@ export default function MyProjectsPage() {
     setTimelinePending(project.id);
     setTimelineError((prev) => { const next = { ...prev }; delete next[project.id]; return next; });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
+    const timeout = setTimeout(() => controller.abort(), 120_000);
     try {
       const res = await fetch(`/api/projects/${project.id}/timeline`, {
         method: "POST",
