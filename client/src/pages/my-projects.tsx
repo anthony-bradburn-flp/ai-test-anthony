@@ -28,6 +28,7 @@ export default function MyProjectsPage() {
   const [clientFilter, setClientFilter] = useState("__all__");
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
   const [timelinePending, setTimelinePending] = useState<string | null>(null);
+  const [timelineError, setTimelineError] = useState<Record<string, string>>({});
 
   const isAdmin = user?.role === "admin" || user?.role === "manager";
 
@@ -97,11 +98,15 @@ export default function MyProjectsPage() {
 
   const generateTimeline = async (project: Project, mode: "update" | "new" = project.smartsheetId ? "update" : "new") => {
     setTimelinePending(project.id);
+    setTimelineError((prev) => { const next = { ...prev }; delete next[project.id]; return next; });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
     try {
       const res = await fetch(`/api/projects/${project.id}/timeline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed");
@@ -114,8 +119,10 @@ export default function MyProjectsPage() {
         ) as any,
       });
     } catch (err: any) {
-      toast.error("Timeline generation failed", { description: err?.message });
+      const msg = err?.name === "AbortError" ? "Timed out — generation took too long" : (err?.message ?? "Failed");
+      setTimelineError((prev) => ({ ...prev, [project.id]: msg }));
     } finally {
+      clearTimeout(timeout);
       setTimelinePending(null);
     }
   };
@@ -232,6 +239,11 @@ export default function MyProjectsPage() {
                                         <ExternalLink className="h-3.5 w-3.5 mr-1" /> View Sheet
                                       </Button>
                                     </a>
+                                  )}
+                                  {timelineError[project.id] && (
+                                    <p className="text-xs text-destructive mt-1 w-full">
+                                      Timeline failed: {timelineError[project.id]}
+                                    </p>
                                   )}
                                   <Link href={`/?projectId=${project.id}`}>
                                     <Button size="sm" className="font-bold">Generate Again</Button>
