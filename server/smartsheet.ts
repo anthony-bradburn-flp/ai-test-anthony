@@ -129,7 +129,7 @@ Return a JSON object with a single key "tasks" containing an array. Tasks are nu
 Each task must have exactly these fields:
 {
   "taskName": "string (concise action-oriented task name)",
-  "phase": "string (phase name aligned to billing milestones)",
+  "phase": "string (logical project phase name, e.g. 'Discovery', 'Design', 'Development', 'UAT', 'Go Live')",
   "startDate": "YYYY-MM-DD",
   "endDate": "YYYY-MM-DD",
   "durationDays": number,
@@ -141,7 +141,8 @@ Each task must have exactly these fields:
 
 Guidelines:
 - Generate 15–30 tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
-- Group tasks into phases that align with the billing milestones
+- Assign phases based on logical project stages for this type of project (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that make sense for a ${project.projectType} project — not all phases apply to every project.
+- Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates, but do NOT use milestone names as phase names
 - Tasks within a phase should appear in sequence; use predecessors to link dependent tasks
 - The first task of each phase typically has no predecessor or depends on the last task of the previous phase
 - Assign realistic start/end dates between ${project.startDate} and ${project.endDate}
