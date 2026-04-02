@@ -18,7 +18,7 @@ import OpenAI from "openai";
 import { getSmartsheetKey, getAnthropicKey, getOpenAIKey } from "./secrets";
 import type { Project } from "../shared/schema";
 
-// Column definitions — order matters: indices are used in writeTaskRows
+// Column definitions for new sheets
 const COLUMNS = [
   { title: "Task Name",       type: "TEXT_NUMBER", primary: true  },
   { title: "Start Date",      type: "DATE",        primary: false },
@@ -30,8 +30,14 @@ const COLUMNS = [
   { title: "Notes",           type: "TEXT_NUMBER", primary: false },
 ] as const;
 
-// Column index constants
-const COL = { TASK: 0, START: 1, END: 2, DUR: 3, PRED: 4, OWNER: 5, STATUS: 6, NOTES: 7 };
+/** Build a column-name → column-ID map from a sheet's columns array. */
+function buildColMap(columns: any[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const col of columns) {
+    map[col.title] = col.id;
+  }
+  return map;
+}
 
 export interface TimelineTask {
   taskName: string;
@@ -105,7 +111,10 @@ function buildTimelinePrompt(project: Project): string {
   const milestones = (project.billingMilestones as { stage: string; percentage: number; date: string }[])
     .map((m) => `  - ${m.stage} (${m.percentage}%): ${m.date}`)
     .join("\n");
-  const owners = (project.flipsideStakeholders as { name: string; role: string }[])
+  const flipsideTeam = (project.flipsideStakeholders as { name: string; role: string }[])
+    .map((s) => `  - ${s.name} (${s.role})`)
+    .join("\n");
+  const clientTeam = (project.clientStakeholders as { name: string; role: string }[])
     .map((s) => `  - ${s.name} (${s.role})`)
     .join("\n");
 
@@ -119,11 +128,14 @@ Project details:
 - End date: ${project.endDate}
 - Summary: ${project.summary}
 
-Billing milestones (use as phase anchors):
+Billing milestones (use as date anchors only — do NOT use as phase names):
 ${milestones}
 
-Team members available to assign as owners:
-${owners}
+Flipside team (internal — own delivery tasks):
+${flipsideTeam}
+
+Client team (own client-side tasks):
+${clientTeam}
 
 Return a JSON object with a single key "tasks" containing an array. Tasks are numbered 1..N in order.
 Each task must have exactly these fields:
@@ -134,19 +146,22 @@ Each task must have exactly these fields:
   "endDate": "YYYY-MM-DD",
   "durationDays": number,
   "predecessors": "string (comma-separated 1-based task numbers this task depends on, e.g. '1' or '2,3', or '' if none)",
-  "owner": "string (first name only from the team list, or 'TBC')",
+  "owner": "string (first name only from the relevant team list, or 'TBC')",
   "status": "Not Started",
   "notes": "string (brief context, or empty string)"
 }
 
 Guidelines:
 - Generate 15–30 tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
-- Assign phases based on logical project stages for this type of project (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that make sense for a ${project.projectType} project — not all phases apply to every project.
-- Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates, but do NOT use milestone names as phase names
+- Assign phases based on logical project stages (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that fit a ${project.projectType} project — not all apply.
+- Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates
+- Owner assignment rules:
+  * Flipside team members own: project management, design, development, UAT amend fixes, DevOps, delivery tasks
+  * Client team members own: content provision, approvals, sign-off, UAT testing/execution, stakeholder reviews, client-side actions
+  * Use first name only (e.g. "Tim", "Anthony") or a client first name; use 'TBC' only if genuinely unclear
 - Tasks within a phase should appear in sequence; use predecessors to link dependent tasks
 - The first task of each phase typically has no predecessor or depends on the last task of the previous phase
 - Assign realistic start/end dates between ${project.startDate} and ${project.endDate}
-- Assign owners sensibly based on their role
 - All dates must be in YYYY-MM-DD format
 - Return only valid JSON, no markdown, no explanation`;
 }
@@ -194,15 +209,15 @@ export async function createTimelineSheet(
   const numericSheetId: number = Number(sheet.result?.id ?? sheet.id);
   const sheetId: string = String(numericSheetId);
 
-  // Fetch column IDs
-  const sheetDetails = await client.sheets.getSheet({ sheetId: numericSheetId });
-  const colIds: number[] = (sheetDetails.columns ?? []).map((c: any) => c.id);
-
-  // Enable Gantt / dependency tracking
+  // Enable Gantt / dependency tracking first — Smartsheet may add columns
   await enableGanttSettings(client, numericSheetId);
 
+  // Fetch columns AFTER enabling Gantt settings so any auto-added columns are included
+  const sheetDetails = await client.sheets.getSheet({ sheetId: numericSheetId });
+  const colMap = buildColMap(sheetDetails.columns ?? []);
+
   // Write task rows grouped by phase with hierarchy
-  await writeTaskRowsWithHierarchy(client, numericSheetId, colIds, tasks);
+  await writeTaskRowsWithHierarchy(client, numericSheetId, colMap, tasks);
 
   const finalSheet = await client.sheets.getSheet({ sheetId: numericSheetId });
   const sheetUrl: string = finalSheet.permalink ?? `https://app.smartsheet.com/sheets/${sheetId}`;
@@ -221,7 +236,7 @@ export async function updateTimelineSheet(
   const numericSheetId = Number(sheetId);
 
   const sheet = await client.sheets.getSheet({ sheetId: numericSheetId });
-  const colIds: number[] = (sheet.columns ?? []).map((c: any) => c.id);
+  const colMap = buildColMap(sheet.columns ?? []);
   const existingRows: any[] = sheet.rows ?? [];
 
   if (existingRows.length > 0) {
@@ -234,7 +249,7 @@ export async function updateTimelineSheet(
     }
   }
 
-  await writeTaskRowsWithHierarchy(client, numericSheetId, colIds, tasks);
+  await writeTaskRowsWithHierarchy(client, numericSheetId, colMap, tasks);
 }
 
 /** Enable dependency tracking (Gantt) on the sheet. */
@@ -257,15 +272,26 @@ async function enableGanttSettings(
 
 /**
  * Write tasks to the sheet grouped into phase header rows (parents) with tasks as children.
- * After all rows are written, predecessor cells are updated with correct row numbers.
+ * Columns are looked up by name so order doesn't matter and extra Smartsheet-injected
+ * columns (e.g. % Complete added when Gantt settings are enabled) don't cause misalignment.
+ * After all rows are written, predecessor cells are updated with correct Smartsheet row numbers.
  */
 async function writeTaskRowsWithHierarchy(
   client: ReturnType<typeof smartsheetLib.createClient>,
   sheetId: number,
-  colIds: number[],
+  colMap: Record<string, number>,
   tasks: TimelineTask[]
 ): Promise<void> {
   if (tasks.length === 0) return;
+
+  const cTask   = colMap["Task Name"];
+  const cStart  = colMap["Start Date"];
+  const cEnd    = colMap["End Date"];
+  const cDur    = colMap["Duration (days)"];
+  const cPred   = colMap["Predecessor"];
+  const cOwner  = colMap["Owner"];
+  const cStatus = colMap["Status"];
+  const cNotes  = colMap["Notes"];
 
   // Group tasks by phase, preserving order
   const phases: string[] = [];
@@ -278,92 +304,75 @@ async function writeTaskRowsWithHierarchy(
     tasksByPhase.get(task.phase)!.push(task);
   }
 
-  // Maps task's 1-based index (position in `tasks` array) to its Smartsheet row number
-  const taskIndexToRowNumber = new Map<number, number>();
-  // Track (taskIndex → rowId) for predecessor updates
-  const taskIndexToRowId = new Map<number, number>();
-  let taskIndex = 0; // 1-based counter across all tasks
+  // task 1-based index → { rowNumber, rowId } for predecessor pass
+  const taskRowInfo = new Map<number, { rowNumber: number; rowId: number }>();
+  let taskIndex = 0;
 
   for (const phase of phases) {
     const phaseTasks = tasksByPhase.get(phase)!;
 
-    // 1. Add the phase header row
+    // Add the phase header row (bold, no children yet)
     const headerResult = await client.sheets.addRows({
       sheetId,
-      body: [{
-        toBottom: true,
-        bold: true,
-        cells: [{ columnId: colIds[COL.TASK], value: phase }],
-      }],
+      body: [{ toBottom: true, bold: true, cells: [{ columnId: cTask, value: phase }] }],
     });
     const headerRows: any[] = headerResult.result ?? headerResult;
     const headerRowId: number = headerRows[0].id;
 
-    // 2. Add task rows as children of the header
+    // Add task rows as children of the header
     const taskRowBodies = phaseTasks.map((task) => ({
       parentId: headerRowId,
       toBottom: true,
       cells: [
-        { columnId: colIds[COL.TASK],   value: task.taskName },
-        { columnId: colIds[COL.START],  value: task.startDate },
-        { columnId: colIds[COL.END],    value: task.endDate },
-        { columnId: colIds[COL.DUR],    value: task.durationDays },
-        // Predecessor written in pass 2; leave blank for now
-        { columnId: colIds[COL.OWNER],  value: task.owner },
-        { columnId: colIds[COL.STATUS], value: task.status },
-        { columnId: colIds[COL.NOTES],  value: task.notes },
-      ].filter((_, i) => colIds[i] !== undefined),
+        cTask   && { columnId: cTask,   value: task.taskName },
+        cStart  && { columnId: cStart,  value: task.startDate },
+        cEnd    && { columnId: cEnd,    value: task.endDate },
+        cDur    && { columnId: cDur,    value: task.durationDays },
+        cOwner  && { columnId: cOwner,  value: task.owner },
+        cStatus && { columnId: cStatus, value: task.status },
+        cNotes  && { columnId: cNotes,  value: task.notes },
+      ].filter(Boolean),
     }));
 
-    // Add in batches of 500
     for (let i = 0; i < taskRowBodies.length; i += 500) {
       const addedResult = await client.sheets.addRows({
         sheetId,
         body: taskRowBodies.slice(i, i + 500),
       });
       const addedRows: any[] = addedResult.result ?? addedResult;
-      addedRows.forEach((row: any, batchOffset: number) => {
-        const tIdx = taskIndex + i + batchOffset + 1; // 1-based
-        taskIndexToRowNumber.set(tIdx, row.rowNumber);
-        taskIndexToRowId.set(tIdx, row.id);
+      addedRows.forEach((row: any, offset: number) => {
+        taskRowInfo.set(taskIndex + i + offset + 1, { rowNumber: row.rowNumber, rowId: row.id });
       });
     }
 
     taskIndex += phaseTasks.length;
   }
 
-  // Pass 2: update predecessor cells for tasks that have predecessors
-  const predecessorUpdates: any[] = [];
+  // Pass 2: update Predecessor cells (skip if no Predecessor column on this sheet)
+  if (!cPred) return;
+
+  const updates: any[] = [];
   let tIdx = 0;
   for (const task of tasks) {
     tIdx++;
     if (!task.predecessors) continue;
 
-    const predRowNumbers = task.predecessors
+    const predValue = task.predecessors
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean)
-      .map((idx) => taskIndexToRowNumber.get(Number(idx)))
-      .filter((n): n is number => n !== undefined);
+      .map((idx) => taskRowInfo.get(Number(idx))?.rowNumber)
+      .filter((n): n is number => n !== undefined)
+      .join(",");
 
-    if (predRowNumbers.length === 0) continue;
-
-    const predValue = predRowNumbers.join(",");
-    const rowId = taskIndexToRowId.get(tIdx);
+    if (!predValue) continue;
+    const rowId = taskRowInfo.get(tIdx)?.rowId;
     if (!rowId) continue;
 
-    predecessorUpdates.push({
-      id: rowId,
-      cells: [{ columnId: colIds[COL.PRED], value: predValue }],
-    });
+    updates.push({ id: rowId, cells: [{ columnId: cPred, value: predValue }] });
   }
 
-  if (predecessorUpdates.length > 0) {
-    for (let i = 0; i < predecessorUpdates.length; i += 500) {
-      await client.sheets.updateRow({
-        sheetId,
-        body: predecessorUpdates.slice(i, i + 500),
-      });
-    }
+  for (let i = 0; i < updates.length; i += 500) {
+    await client.sheets.updateRow({ sheetId, body: updates.slice(i, i + 500) });
   }
 }
