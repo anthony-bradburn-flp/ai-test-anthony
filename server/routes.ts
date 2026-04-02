@@ -14,7 +14,8 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, Ta
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, DATA_DIR } from "./storage";
-import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey } from "./secrets";
+import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey, hasSmartsheetKey } from "./secrets";
+import { verifySmartsheetConnection, generateTimelineTasks, createTimelineSheet, updateTimelineSheet } from "./smartsheet";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
 const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
@@ -148,16 +149,17 @@ export async function registerRoutes(
 
   app.get("/api/admin/ai-settings", requireAdmin, async (_req, res) => {
     const settings = await storage.getAiSettings();
-    res.json({ ...settings, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
+    res.json({ ...settings, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey(), hasSmartsheetKey: hasSmartsheetKey() });
   });
 
   app.post("/api/admin/ai-settings", requireSuperAdmin, async (req, res) => {
-    const { provider, orgId, systemPrompt, companyName } = req.body;
+    const { provider, orgId, systemPrompt, companyName, smartsheetWorkspaceId } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
       ...(orgId !== undefined && { orgId }),
       ...(systemPrompt !== undefined && { systemPrompt }),
       ...(companyName !== undefined && { companyName }),
+      ...(smartsheetWorkspaceId !== undefined && { smartsheetWorkspaceId: smartsheetWorkspaceId || null }),
     });
     audit("AI_SETTINGS_UPDATED", req, { provider: updated.provider });
     res.json({ ...updated, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
@@ -603,6 +605,58 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // --- Smartsheet ---
+
+  app.get("/api/smartsheet/enabled", requireAuth, async (_req, res) => {
+    res.json({ enabled: hasSmartsheetKey() });
+  });
+
+  app.get("/api/smartsheet/status", requireAdmin, async (_req, res) => {
+    if (!hasSmartsheetKey()) {
+      res.json({ connected: false, reason: "not_configured" });
+      return;
+    }
+    const result = await verifySmartsheetConnection();
+    res.json(result);
+  });
+
+  app.post("/api/projects/:id/timeline", requireAuth, async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    if (!hasSmartsheetKey()) { res.status(503).json({ error: "Smartsheet is not configured" }); return; }
+
+    try {
+      const settings = await storage.getAiSettings();
+      const tasks = await generateTimelineTasks(project, settings);
+
+      let sheetId = project.smartsheetId;
+      let sheetUrl = project.smartsheetUrl ?? "";
+      const mode: "update" | "new" = req.body?.mode === "new" ? "new" : (sheetId ? "update" : "new");
+
+      if (mode === "update" && sheetId) {
+        await updateTimelineSheet(sheetId, tasks);
+      } else {
+        const result = await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+        sheetId = result.sheetId;
+        sheetUrl = result.sheetUrl;
+      }
+
+      const newVersion = (project.timelineVersion ?? 0) + (mode === "new" ? 1 : 0);
+      await storage.updateProject(project.id, {
+        smartsheetId: sheetId,
+        smartsheetUrl: sheetUrl,
+        timelineGeneratedAt: new Date().toISOString(),
+        timelineVersion: newVersion || 1,
+      });
+
+      audit("TIMELINE_GENERATED", req, { projectId: project.id, mode, sheetId });
+      res.json({ ok: true, sheetId, sheetUrl, mode });
+    } catch (err: any) {
+      console.error("[timeline] Failed:", err?.message ?? err);
+      res.status(500).json({ error: err?.message ?? "Failed to generate timeline" });
+    }
+  });
+
   // --- Read-only endpoints for authenticated (non-admin) users ---
   app.get("/api/templates", requireAuth, async (_req, res) => {
     res.json(await storage.listTemplates());
@@ -643,6 +697,7 @@ export async function registerRoutes(
     const projectData = parsed.data;
     const projectId = typeof req.body.projectId === "string" ? req.body.projectId : undefined;
     const versionMode: "replace" | "new" = req.body.versionMode === "new" ? "new" : "replace";
+    const generateTimeline: boolean = req.body.generateTimeline === true && hasSmartsheetKey();
 
     const activeKey = settings.provider === "anthropic" ? getAnthropicKey() : getOpenAIKey();
     if (!activeKey) {
@@ -998,6 +1053,37 @@ export async function registerRoutes(
             });
           }
           await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+
+          // Optionally generate Smartsheet timeline
+          if (generateTimeline) {
+            try {
+              const project = await storage.getProject(projectId);
+              if (project) {
+                const tasks = await generateTimelineTasks(project, settings);
+                const existing = project.smartsheetId;
+                let sheetId = existing;
+                let sheetUrl = project.smartsheetUrl ?? "";
+                if (existing && versionMode === "replace") {
+                  await updateTimelineSheet(existing, tasks);
+                } else {
+                  const result = await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+                  sheetId = result.sheetId;
+                  sheetUrl = result.sheetUrl;
+                }
+                const newVersion = (project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0);
+                await storage.updateProject(projectId, {
+                  smartsheetId: sheetId ?? undefined,
+                  smartsheetUrl: sheetUrl,
+                  timelineGeneratedAt: new Date().toISOString(),
+                  timelineVersion: newVersion || 1,
+                });
+                send({ type: "timeline", sheetUrl });
+              }
+            } catch (timelineErr: any) {
+              console.error("[generate] Timeline generation failed:", timelineErr?.message ?? timelineErr);
+              send({ type: "timeline_error", error: timelineErr?.message ?? "Timeline generation failed" });
+            }
+          }
         } catch (saveErr) {
           console.error("[generate] Failed to save documents:", saveErr);
         }

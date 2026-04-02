@@ -93,6 +93,7 @@ type AiSettingsResponse = {
   trainingDocFilename: string | null;
   trainingDocUploadedAt: string | null;
   trainingDocSize: number | null;
+  smartsheetWorkspaceId: string | null;
 };
 
 function SectionCard({
@@ -168,6 +169,7 @@ export default function AdminPage() {
   const queryClient = useQueryClient();
   const [systemPrompt, setSystemPrompt] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [smartsheetWorkspaceId, setSmartsheetWorkspaceId] = useState("");
   const [showDocContent, setShowDocContent] = useState(false);
   const [docContentPreview, setDocContentPreview] = useState<string | null>(null);
   const trainingDocInputRef = useRef<HTMLInputElement>(null);
@@ -502,6 +504,15 @@ export default function AdminPage() {
     });
   };
 
+  const { data: smartsheetStatus, refetch: refetchSmartsheetStatus } = useQuery<{ connected: boolean; email?: string; error?: string; reason?: string }>({
+    queryKey: ["/api/smartsheet/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/smartsheet/status");
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
   const { data: aiSettings } = useQuery<AiSettingsResponse>({
     queryKey: ["/api/admin/ai-settings"],
     queryFn: async () => {
@@ -517,12 +528,13 @@ export default function AdminPage() {
     if (aiSettings) {
       setSystemPrompt(aiSettings.systemPrompt);
       setCompanyName(aiSettings.companyName);
+      setSmartsheetWorkspaceId(aiSettings.smartsheetWorkspaceId ?? "");
     }
   }, [aiSettings]);
 
   const saveSettingsMutation = useMutation({
     mutationFn: async () => {
-      const body: Record<string, string> = { systemPrompt, companyName };
+      const body: Record<string, string | null> = { systemPrompt, companyName, smartsheetWorkspaceId: smartsheetWorkspaceId.trim() || null };
       const res = await fetch("/api/admin/ai-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1679,6 +1691,66 @@ export default function AdminPage() {
                     className="hidden"
                     onChange={handleTrainingDocFileChange}
                   />
+                </div>
+
+                {/* Smartsheet */}
+                <div className="space-y-4 border-t border-border pt-6">
+                  <div>
+                    <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
+                      <FileText className="h-4 w-4 text-primary" />
+                      Smartsheet Integration
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      AI-generated project timelines are written directly to Smartsheet. The API key is stored in AWS Parameter Store (<code>/pm-governance/smartsheet-api-key</code>).
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/40 p-4 flex items-center gap-3">
+                    {smartsheetStatus?.connected ? (
+                      <>
+                        <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Connected</p>
+                          {smartsheetStatus.email && <p className="text-xs text-muted-foreground">Service account: {smartsheetStatus.email}</p>}
+                        </div>
+                      </>
+                    ) : smartsheetStatus?.reason === "not_configured" ? (
+                      <>
+                        <X className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Not configured</p>
+                          <p className="text-xs text-muted-foreground">Add <code>/pm-governance/smartsheet-api-key</code> to AWS Parameter Store to enable.</p>
+                        </div>
+                      </>
+                    ) : smartsheetStatus ? (
+                      <>
+                        <X className="h-4 w-4 text-destructive shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Connection failed</p>
+                          <p className="text-xs text-muted-foreground">{smartsheetStatus.error}</p>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Checking connection…</p>
+                    )}
+                    <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-xs" onClick={() => refetchSmartsheetStatus()}>
+                      Refresh
+                    </Button>
+                  </div>
+                  {smartsheetStatus?.connected && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="smartsheet-workspace">Workspace ID</Label>
+                      <Input
+                        id="smartsheet-workspace"
+                        value={smartsheetWorkspaceId}
+                        onChange={(e) => setSmartsheetWorkspaceId(e.target.value)}
+                        placeholder="Paste your Smartsheet workspace ID"
+                        disabled={!isAdmin}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Timeline sheets will be created in this workspace. Find the ID in the workspace URL: <code>smartsheet.com/workspaces/<strong>1234567890</strong></code>
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </SectionCard>

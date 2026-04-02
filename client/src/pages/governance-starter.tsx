@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
-import { Trash2 } from "lucide-react";
+import { Trash2, FileText } from "lucide-react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useFieldArray } from "react-hook-form";
@@ -128,10 +128,21 @@ export default function GovernanceStarterPage() {
   const [newClientName, setNewClientName] = useState("");
   const [showNewClientInput, setShowNewClientInput] = useState(false);
   const [versionModal, setVersionModal] = useState<{ open: boolean; onConfirm: (mode: "replace" | "new") => void } | null>(null);
+  const [generateTimeline, setGenerateTimeline] = useState(false);
+  const [timelineSheetUrl, setTimelineSheetUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
   }, [isAuthenticated, isLoading, navigate]);
+
+  const { data: smartsheetEnabled } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/smartsheet/enabled"],
+    queryFn: async () => {
+      const res = await fetch("/api/smartsheet/enabled");
+      return res.ok ? res.json() : { enabled: false };
+    },
+    enabled: isAuthenticated,
+  });
 
   // Load templates and packages to drive the docsRequired checkbox list
   const { data: availableTemplates } = useQuery<Array<{ id: string; name: string; generateMode?: string }>>({
@@ -321,6 +332,7 @@ export default function GovernanceStarterPage() {
       supportingDocs: uploads.map((u) => ({ name: u.name, content: u.content })),
       projectId,
       versionMode,
+      generateTimeline: generateTimeline && !!projectId,
     };
 
     const abortController = new AbortController();
@@ -380,6 +392,11 @@ export default function GovernanceStarterPage() {
                 ? "Training document standards applied."
                 : "No training document — configure one in Admin > AI Settings.",
             });
+          } else if (event.type === "timeline") {
+            setTimelineSheetUrl(event.sheetUrl as string);
+            toast.success("Smartsheet timeline created", { description: "Your project timeline has been written to Smartsheet." });
+          } else if (event.type === "timeline_error") {
+            toast.warning("Timeline generation failed", { description: event.error as string });
           } else if (event.type === "error") {
             throw new Error(event.error ?? "Generation failed");
           }
@@ -1248,6 +1265,19 @@ export default function GovernanceStarterPage() {
               <div className="mt-3.5 text-xs text-muted-foreground">
                 Use <strong>Generate documents</strong> to submit the form and trigger document generation downstream.
               </div>
+
+              {smartsheetEnabled?.enabled && selectedProjectId && (
+                <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-background p-2.5 px-3">
+                  <Checkbox
+                    id="generate-timeline"
+                    checked={generateTimeline}
+                    onCheckedChange={(v) => setGenerateTimeline(!!v)}
+                  />
+                  <label htmlFor="generate-timeline" className="text-sm cursor-pointer select-none">
+                    Generate Smartsheet timeline
+                  </label>
+                </div>
+              )}
             </SectionCard>
 
             <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-border bg-muted p-4 rounded-[14px] dark:bg-muted/80 mt-2">
@@ -1350,6 +1380,17 @@ export default function GovernanceStarterPage() {
                 </Button>
               )}
             </div>
+            {timelineSheetUrl && !isGenerating && (
+              <a
+                href={timelineSheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-xl border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 px-3 py-2.5 text-sm text-green-700 dark:text-green-300 font-medium hover:bg-green-100 transition-colors"
+              >
+                <FileText className="h-4 w-4 shrink-0" />
+                View Smartsheet Timeline →
+              </a>
+            )}
             {generatedDocs.length === 0 && (
               <div className="rounded-[14px] border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
                 Documents will appear here as they are ready…
