@@ -291,9 +291,10 @@ async function enableGanttSettings(
 ): Promise<void> {
   try {
     // Step 1 — enable dependencies; Smartsheet auto-adds Predecessor column
+    // Note: dependenciesEnabled is a Sheet-level field (not inside projectSettings)
     await client.sheets.updateSheet({
       sheetId: numericSheetId,
-      body: { projectSettings: { dependencyEnabled: true } },
+      body: { dependenciesEnabled: true },
     });
   } catch (err: any) {
     console.warn("[timeline] Could not enable dependencies:", err?.message ?? err);
@@ -350,20 +351,27 @@ async function writeTaskRowsWithHierarchy(
     tasksByPhase.get(task.phase)!.push(task);
   }
 
+  // Add ALL phase header rows in one batch → saves N API calls
+  const headerBatchResult = await client.sheets.addRows({
+    sheetId,
+    body: phases.map((phase) => ({
+      toBottom: true,
+      bold: true,
+      cells: [{ columnId: cTask, value: phase }],
+    })),
+  });
+  const headerRows: any[] = headerBatchResult.result ?? headerBatchResult;
+  const phaseHeaderId = new Map<string, number>(
+    phases.map((phase, i) => [phase, headerRows[i].id])
+  );
+
   // task 1-based index → { rowNumber, rowId } for predecessor pass
   const taskRowInfo = new Map<number, { rowNumber: number; rowId: number }>();
   let taskIndex = 0;
 
   for (const phase of phases) {
     const phaseTasks = tasksByPhase.get(phase)!;
-
-    // Add the phase header row (bold, no children yet)
-    const headerResult = await client.sheets.addRows({
-      sheetId,
-      body: [{ toBottom: true, bold: true, cells: [{ columnId: cTask, value: phase }] }],
-    });
-    const headerRows: any[] = headerResult.result ?? headerResult;
-    const headerRowId: number = headerRows[0].id;
+    const headerRowId = phaseHeaderId.get(phase)!;
 
     // Add task rows as children of the header
     const taskRowBodies = phaseTasks.map((task) => ({
