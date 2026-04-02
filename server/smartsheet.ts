@@ -186,13 +186,13 @@ export async function createTimelineSheet(
   const sheetId: string = String(numericSheetId);
 
   // Fetch the sheet to get column IDs
-  const sheetDetails = await client.sheets.getSheet({ id: numericSheetId });
+  const sheetDetails = await client.sheets.getSheet({ sheetId: numericSheetId });
   const colIds: number[] = (sheetDetails.columns ?? []).map((c: any) => c.id);
 
   await writeTaskRows(client, numericSheetId, colIds, tasks);
 
   // Retrieve the permalink
-  const finalSheet = await client.sheets.getSheet({ id: numericSheetId });
+  const finalSheet = await client.sheets.getSheet({ sheetId: numericSheetId });
   const sheetUrl: string = finalSheet.permalink ?? `https://app.smartsheet.com/sheets/${sheetId}`;
 
   return { sheetId, sheetUrl };
@@ -209,7 +209,7 @@ export async function updateTimelineSheet(
   const numericSheetId = Number(sheetId);
 
   // Get current rows and column IDs
-  const sheet = await client.sheets.getSheet({ id: numericSheetId });
+  const sheet = await client.sheets.getSheet({ sheetId: numericSheetId });
   const colIds: number[] = (sheet.columns ?? []).map((c: any) => c.id);
   const existingRows: any[] = sheet.rows ?? [];
 
@@ -220,7 +220,7 @@ export async function updateTimelineSheet(
     for (let i = 0; i < rowIds.length; i += 450) {
       await client.sheets.deleteRows({
         sheetId: numericSheetId,
-        body: { ids: rowIds.slice(i, i + 450) },
+        queryParameters: { ids: rowIds.slice(i, i + 450) },
       });
     }
   }
