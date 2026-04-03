@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import { join, extname } from "path";
-import nodemailer from "nodemailer";
+import { sendEmail, emailEnabled } from "./email";
 import rateLimit from "express-rate-limit";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
@@ -13,8 +13,9 @@ import mammoth from "mammoth";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } from "docx";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
-import { storage, verifyPassword, hashPassword } from "./storage";
-import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey } from "./secrets";
+import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, DATA_DIR } from "./storage";
+import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey, hasSmartsheetKey } from "./secrets";
+import { verifySmartsheetConnection, generateTimelineTasks, createTimelineSheet, upsertTimeline } from "./smartsheet";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
 const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
@@ -65,23 +66,6 @@ function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
   res.status(403).json({ message: "Super admin access required" });
 }
 
-async function sendEmail(to: string, subject: string, text: string) {
-  if (!process.env.SMTP_HOST) {
-    console.log(`[EMAIL - no SMTP configured] To: ${to} | Subject: ${subject} | Body: ${text}`);
-    return;
-  }
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT || "587"),
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
-  await transporter.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-    to,
-    subject,
-    text,
-  });
-}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -120,28 +104,62 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/auth/me", (req, res) => {
-    if (req.session.userId) {
-      res.json({ username: req.session.username, role: req.session.role });
-    } else {
-      res.status(401).json({ message: "Not authenticated" });
+  app.get("/api/auth/me", async (req, res) => {
+    if (!req.session.userId) return res.status(401).json({ message: "Not authenticated" });
+    const user = await storage.getUser(req.session.userId);
+    if (!user) return res.status(401).json({ message: "Not authenticated" });
+    res.json({ id: user.id, username: user.username, role: user.role, email: user.email, mustChangePassword: user.mustChangePassword });
+  });
+
+  app.patch("/api/auth/me", requireAuth, async (req, res) => {
+    const { username, email } = req.body as { username?: string; email?: string };
+    if (!username?.trim()) return res.status(400).json({ error: "Username is required" });
+    const existing = await storage.getUserByUsername(username.trim());
+    if (existing && existing.id !== req.session.userId) {
+      return res.status(409).json({ error: "Username already taken" });
     }
+    const updated = await storage.updateUser(req.session.userId!, {
+      username: username.trim(),
+      email: email?.trim() || null,
+    });
+    if (!updated) return res.status(404).json({ error: "User not found" });
+    req.session.username = updated.username;
+    res.json(updated);
+  });
+
+  app.patch("/api/auth/me/password", requireAuth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Current and new password are required" });
+    }
+    const user = await storage.getUser(req.session.userId!);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    const valid = await verifyPassword(currentPassword, user.password);
+    if (!valid) return res.status(401).json({ error: "Current password is incorrect" });
+    const { passwordSchema } = await import("@shared/schema");
+    const parsed = passwordSchema.safeParse(newPassword);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    const hash = await hashPassword(newPassword);
+    await storage.updateUserPassword(req.session.userId!, hash);
+    await storage.updateUser(req.session.userId!, { mustChangePassword: false });
+    res.json({ ok: true });
   });
 
   // --- AI Settings ---
 
   app.get("/api/admin/ai-settings", requireAdmin, async (_req, res) => {
     const settings = await storage.getAiSettings();
-    res.json({ ...settings, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
+    res.json({ ...settings, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey(), hasSmartsheetKey: hasSmartsheetKey() });
   });
 
   app.post("/api/admin/ai-settings", requireSuperAdmin, async (req, res) => {
-    const { provider, orgId, systemPrompt, companyName } = req.body;
+    const { provider, orgId, systemPrompt, companyName, smartsheetWorkspaceId } = req.body;
     const updated = await storage.updateAiSettings({
       ...(provider && { provider }),
       ...(orgId !== undefined && { orgId }),
       ...(systemPrompt !== undefined && { systemPrompt }),
       ...(companyName !== undefined && { companyName }),
+      ...(smartsheetWorkspaceId !== undefined && { smartsheetWorkspaceId: smartsheetWorkspaceId || null }),
     });
     audit("AI_SETTINGS_UPDATED", req, { provider: updated.provider });
     res.json({ ...updated, hasOpenAIKey: hasOpenAIKey(), hasAnthropicKey: hasAnthropicKey() });
@@ -218,7 +236,7 @@ export async function registerRoutes(
       return;
     }
     const hashed = await hashPassword(parsed.data.password);
-    const user = await storage.createUser({ ...parsed.data, password: hashed });
+    const user = await storage.createUser({ ...parsed.data, password: hashed, mustChangePassword: true });
     const { password: _, ...safeUser } = user;
     audit("USER_CREATED", req, { newUser: parsed.data.username, role: parsed.data.role });
     res.status(201).json(safeUser);
@@ -286,6 +304,12 @@ export async function registerRoutes(
   // --- Forgot Password ---
 
   app.post("/api/auth/forgot-password", forgotPasswordRateLimit, async (req, res) => {
+    // Self-service reset is only available when an email provider is configured.
+    // Without one, users must contact their admin.
+    if (!emailEnabled()) {
+      res.status(503).json({ error: "Self-service password reset is not available. Contact your administrator." });
+      return;
+    }
     const { username } = req.body;
     if (!username || typeof username !== "string") {
       res.status(400).json({ error: "Username is required" });
@@ -301,12 +325,33 @@ export async function registerRoutes(
     const tempPassword = randomBytes(10).toString("hex");
     const hashed = await hashPassword(tempPassword);
     await storage.updateUserPassword(user.id, hashed);
-    await sendEmail(
-      user.email,
-      "Your temporary password",
-      `Your temporary password is: ${tempPassword}\n\nPlease log in and change it as soon as possible.`
-    );
+    await storage.updateUser(user.id, { mustChangePassword: true });
+    await sendEmail({
+      to: user.email,
+      subject: "Your temporary password",
+      text: `Your temporary password is: ${tempPassword}\n\nPlease log in and change it as soon as possible.`
+    });
     res.json({ message: successMessage });
+  });
+
+  app.post("/api/admin/users/:id/reset-password", requireAdmin, async (req, res) => {
+    const target = await storage.getUser(req.params.id);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    const tempPassword = randomBytes(6).toString("hex").toUpperCase();
+    const hashed = await hashPassword(tempPassword);
+    await storage.updateUserPassword(target.id, hashed);
+    await storage.updateUser(target.id, { mustChangePassword: true });
+    audit("PASSWORD_RESET", req, { targetUser: target.username });
+    if (emailEnabled() && target.email) {
+      await sendEmail({
+        to: target.email,
+        subject: "Your password has been reset",
+        text: `Your password has been reset by an administrator.\n\nTemporary password: ${tempPassword}\n\nPlease log in and change it immediately.`,
+      });
+      res.json({ ok: true, emailed: true });
+    } else {
+      res.json({ ok: true, emailed: false, tempPassword });
+    }
   });
 
   // --- Packages ---
@@ -417,6 +462,16 @@ export async function registerRoutes(
     res.json(updated);
   });
 
+  app.get("/api/admin/templates/:id/download", requireAdmin, async (req, res) => {
+    const template = await storage.getTemplate(req.params.id);
+    if (!template?.filePath || !existsSync(template.filePath)) {
+      return res.status(404).json({ message: "Template file not found" });
+    }
+    const filename = template.originalFilename ?? template.name;
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.sendFile(template.filePath, { root: "/" });
+  });
+
   app.delete("/api/admin/templates/:id", requireAdmin, async (req, res) => {
     const existing = await storage.getTemplate(req.params.id);
     await storage.deleteTemplate(req.params.id);
@@ -434,6 +489,171 @@ export async function registerRoutes(
     }
 
     res.json({ ok: true });
+  });
+
+  // --- Client & Project management ---
+
+  app.get("/api/clients", requireAuth, async (_req, res) => {
+    res.json(await storage.listClients());
+  });
+
+  app.post("/api/clients", requireAuth, async (req, res) => {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "Name required" });
+    const existing = (await storage.listClients()).find((c) => c.name.toLowerCase() === name.trim().toLowerCase());
+    if (existing) return res.json(existing);
+    const client = await storage.createClient(name.trim(), req.session.userId!);
+    res.json(client);
+  });
+
+  app.patch("/api/clients/:id", requireAdmin, async (req, res) => {
+    const { name } = req.body;
+    if (!name?.trim()) return res.status(400).json({ message: "Name required" });
+    const updated = await storage.updateClient(req.params.id, name.trim());
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    res.json(updated);
+  });
+
+  app.delete("/api/clients/:id", requireAdmin, async (req, res) => {
+    const projects = await storage.listProjects(req.params.id);
+    if (projects.length > 0) return res.status(400).json({ message: "Cannot delete client with existing projects" });
+    await storage.deleteClient(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/projects", requireAuth, async (req, res) => {
+    const clientId = req.query.clientId as string | undefined;
+    const session = req.session as { userId?: string; role?: string };
+    const createdBy = session.role === "admin" || session.role === "manager" ? undefined : session.userId;
+    res.json(await storage.listProjects(clientId, createdBy));
+  });
+
+  app.get("/api/projects/mine", requireAuth, async (req, res) => {
+    const session = req.session as { userId?: string; role?: string };
+    const createdBy = session.role === "admin" ? undefined : session.userId!;
+    res.json(await storage.listProjects(undefined, createdBy));
+  });
+
+  app.get("/api/projects/:id", requireAuth, async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Not found" });
+    res.json(project);
+  });
+
+  app.post("/api/projects", requireAuth, async (req, res) => {
+    const { clientId, clientName, sheetRef, projectName, projectType, projectSize, value, startDate, endDate, summary, sponsorName, sponsorRole, billingMilestones, flipsideStakeholders, clientStakeholders } = req.body;
+    if (!clientId || !projectName) return res.status(400).json({ message: "clientId and projectName required" });
+    const project = await storage.createProject({
+      clientId, clientName, sheetRef, projectName, projectType, projectSize, value,
+      startDate, endDate, summary, sponsorName, sponsorRole,
+      billingMilestones: billingMilestones ?? [],
+      flipsideStakeholders: flipsideStakeholders ?? [],
+      clientStakeholders: clientStakeholders ?? [],
+      createdBy: req.session.userId!,
+    });
+    res.json(project);
+  });
+
+  app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+    const updated = await storage.updateProject(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ message: "Not found" });
+    res.json(updated);
+  });
+
+  app.delete("/api/projects/:id", requireAdmin, async (req, res) => {
+    await storage.deleteDocumentsByProject(req.params.id);
+    await storage.deleteProject(req.params.id);
+    res.json({ ok: true });
+  });
+
+  app.get("/api/projects/:id/documents", requireAuth, async (req, res) => {
+    res.json(await storage.listDocuments(req.params.id));
+  });
+
+  app.get("/api/documents/:id/download", requireAuth, async (req, res) => {
+    const doc = await storage.getDocument(req.params.id);
+    if (!doc) return res.status(404).json({ message: "Not found" });
+    const fullPath = join(DATA_DIR, doc.storagePath);
+    if (!existsSync(fullPath)) return res.status(404).json({ message: "File not found on disk" });
+    res.setHeader("Content-Disposition", `attachment; filename="${doc.filename}"`);
+    res.sendFile(fullPath, { root: "/" });
+  });
+
+  app.get("/api/projects/:id/documents/download-all", requireAuth, async (req, res) => {
+    const docs = await storage.listDocuments(req.params.id);
+    const latest = docs.filter((d) => d.isLatest);
+    if (latest.length === 0) return res.status(404).json({ message: "No documents found" });
+    const zip = new JSZip();
+    for (const doc of latest) {
+      const fullPath = join(DATA_DIR, doc.storagePath);
+      if (existsSync(fullPath)) {
+        const { readFileSync } = await import("fs");
+        zip.file(doc.filename, readFileSync(fullPath));
+      }
+    }
+    const project = await storage.getProject(req.params.id);
+    const zipName = project ? `${project.sheetRef}_${project.clientName}_documents.zip` : "documents.zip";
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`);
+    res.setHeader("Content-Type", "application/zip");
+    res.send(buffer);
+  });
+
+  app.delete("/api/documents/:id", requireAdmin, async (req, res) => {
+    const doc = await storage.deleteDocument(req.params.id);
+    if (!doc) return res.status(404).json({ message: "Not found" });
+    res.json({ ok: true });
+  });
+
+  // --- Smartsheet ---
+
+  app.get("/api/smartsheet/enabled", requireAuth, async (_req, res) => {
+    res.json({ enabled: hasSmartsheetKey() });
+  });
+
+  app.get("/api/smartsheet/status", requireAdmin, async (_req, res) => {
+    if (!hasSmartsheetKey()) {
+      res.json({ connected: false, reason: "not_configured" });
+      return;
+    }
+    const result = await verifySmartsheetConnection();
+    res.json(result);
+  });
+
+  app.post("/api/projects/:id/timeline", requireAuth, async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+    if (!hasSmartsheetKey()) { res.status(503).json({ error: "Smartsheet is not configured" }); return; }
+
+    try {
+      const settings = await storage.getAiSettings();
+      const tasks = await generateTimelineTasks(project, settings);
+
+      let sheetId = project.smartsheetId;
+      let sheetUrl = project.smartsheetUrl ?? "";
+
+      const result = sheetId
+        ? await upsertTimeline(sheetId, project, tasks, settings.smartsheetWorkspaceId)
+        : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+      sheetId = result.sheetId;
+      sheetUrl = result.sheetUrl;
+
+      const mode = sheetId === project.smartsheetId ? "update" : "new";
+
+      const newVersion = (project.timelineVersion ?? 0) + (mode === "new" ? 1 : 0);
+      await storage.updateProject(project.id, {
+        smartsheetId: sheetId,
+        smartsheetUrl: sheetUrl,
+        timelineGeneratedAt: new Date().toISOString(),
+        timelineVersion: newVersion || 1,
+      });
+
+      audit("TIMELINE_GENERATED", req, { projectId: project.id, mode, sheetId });
+      res.json({ ok: true, sheetId, sheetUrl, mode });
+    } catch (err: any) {
+      console.error("[timeline] Failed:", err?.message ?? err);
+      res.status(500).json({ error: err?.message ?? "Failed to generate timeline" });
+    }
   });
 
   // --- Read-only endpoints for authenticated (non-admin) users ---
@@ -474,6 +694,9 @@ export async function registerRoutes(
 
     const settings = await storage.getAiSettings();
     const projectData = parsed.data;
+    const projectId = typeof req.body.projectId === "string" ? req.body.projectId : undefined;
+    const versionMode: "replace" | "new" = req.body.versionMode === "new" ? "new" : "replace";
+    const generateTimeline: boolean = req.body.generateTimeline === true && hasSmartsheetKey();
 
     const activeKey = settings.provider === "anthropic" ? getAnthropicKey() : getOpenAIKey();
     if (!activeKey) {
@@ -490,6 +713,12 @@ export async function registerRoutes(
     res.flushHeaders();
 
     const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
+    const generatedDocBuffers: Array<{ name: string; filename: string; format: string; buffer: Buffer }> = [];
+    const sendDoc = (event: Record<string, unknown>) => {
+      const doc = event.document as { name: string; filename: string; format: string; content: string } | undefined;
+      if (doc?.content) generatedDocBuffers.push({ name: doc.name, filename: doc.filename, format: doc.format, buffer: Buffer.from(doc.content, "base64") });
+      send(event);
+    };
 
     try {
       // Load templates, packages, and extract supporting docs all in parallel
@@ -582,10 +811,10 @@ export async function registerRoutes(
         const filename = `${projectData.sheetRef}_${projectData.client}_${safeName}${ext}`;
         try {
           const fileBuffer = readFileSync(tpl.filePath!);
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Template included as-is: ${tpl.originalFilename}]` } });
         } catch (err) {
           console.error(`[generate] passthrough read failed for ${docName}:`, err);
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: "", preview: `[Passthrough failed — file could not be read]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: "", preview: `[Passthrough failed — file could not be read]` } });
         }
       }
 
@@ -703,10 +932,10 @@ export async function registerRoutes(
           } else {
             fileBuffer = readFileSync(tpl.filePath!);
           }
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Placeholder template filled: ${tpl.originalFilename}]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: fileBuffer.toString("base64"), preview: `[Placeholder template filled: ${tpl.originalFilename}]` } });
         } catch (err) {
           console.error(`[generate] placeholder fill failed for ${docName}:`, err);
-          send({ type: "document", document: { name: docName, filename, format: fmt, content: readFileSync(tpl.filePath!).toString("base64"), preview: `[Placeholder fill failed — template included as-is]` } });
+          sendDoc({ type: "document", document: { name: docName, filename, format: fmt, content: readFileSync(tpl.filePath!).toString("base64"), preview: `[Placeholder fill failed — template included as-is]` } });
         }
       }
 
@@ -751,12 +980,12 @@ export async function registerRoutes(
               preview = doc.content ?? "";
             }
 
-            send({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
+            sendDoc({ type: "document", document: { name: doc.name, filename, format: fmt, content: fileBuffer.toString("base64"), preview } });
           } catch (err) {
             console.error(`[generate] AI doc build failed for ${doc.name}:`, err);
             // Always send a document event so the client count stays consistent
             const fallback = Buffer.from(`[Generation failed for ${doc.name}: ${err instanceof Error ? err.message : "unknown error"}]`, "utf8");
-            send({ type: "document", document: { name: doc.name, filename: filename.replace(/\.[^.]+$/, ".txt"), format: "txt", content: fallback.toString("base64"), preview: "" } });
+            sendDoc({ type: "document", document: { name: doc.name, filename: filename.replace(/\.[^.]+$/, ".txt"), format: "txt", content: fallback.toString("base64"), preview: "" } });
           }
         }));
       }
@@ -777,16 +1006,84 @@ export async function registerRoutes(
           } else {
             fileBuffer = readFileSync(execSummaryTpl.filePath);
           }
-          send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: fileBuffer.toString("base64"), preview: "[Executive Summary generated]" } });
+          sendDoc({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: fileBuffer.toString("base64"), preview: "[Executive Summary generated]" } });
         } catch (err) {
           console.error("[generate] executive summary fill failed — sending unfilled template:", err);
           // Always send a document event so the client count stays consistent
-          send({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: readFileSync(execSummaryTpl.filePath).toString("base64"), preview: "[Executive Summary fill failed — template included as-is]" } });
+          sendDoc({ type: "document", document: { name: "Executive Summary", filename, format: fmt, content: readFileSync(execSummaryTpl.filePath).toString("base64"), preview: "[Executive Summary fill failed — template included as-is]" } });
         }
       }
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
       send({ type: "done", provider: settings.provider });
+
+      // --- Persist documents against project ---
+      if (projectId && generatedDocBuffers.length > 0) {
+        try {
+          const projectDir = join(DOCUMENTS_DIR, projectId);
+          if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+          const existingDocs = await storage.listDocuments(projectId);
+          const runId = randomBytes(8).toString("hex");
+
+          // Determine next version number
+          let nextVersion = 1;
+          if (existingDocs.length > 0) {
+            if (versionMode === "replace") {
+              await storage.deleteDocumentsByProject(projectId);
+            } else {
+              const maxVersion = Math.max(...existingDocs.map((d) => d.version));
+              nextVersion = maxVersion + 1;
+              await storage.markDocumentsNotLatest(projectId);
+            }
+          }
+
+          for (const { name, filename, format, buffer } of generatedDocBuffers) {
+            const docId = randomBytes(8).toString("hex");
+            const storagePath = `documents/${projectId}/${docId}_${filename}`;
+            const fullPath = join(DATA_DIR, storagePath);
+            writeFileSync(fullPath, buffer);
+            await storage.createDocument({
+              projectId, name, filename, format,
+              storagePath, fileSize: buffer.length,
+              generatedAt: new Date().toISOString(),
+              generatedBy: req.session.userId!,
+              runId, version: nextVersion,
+              versionLabel: `v${nextVersion}`, isLatest: true,
+            });
+          }
+          await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+
+          // Optionally generate Smartsheet timeline
+          if (generateTimeline) {
+            try {
+              const project = await storage.getProject(projectId);
+              if (project) {
+                const tasks = await generateTimelineTasks(project, settings);
+                const existing = project.smartsheetId;
+                const tlResult = existing
+                  ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
+                  : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+                let sheetId = tlResult.sheetId;
+                let sheetUrl = tlResult.sheetUrl;
+                const newVersion = (project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0);
+                await storage.updateProject(projectId, {
+                  smartsheetId: sheetId ?? undefined,
+                  smartsheetUrl: sheetUrl,
+                  timelineGeneratedAt: new Date().toISOString(),
+                  timelineVersion: newVersion || 1,
+                });
+                send({ type: "timeline", sheetUrl });
+              }
+            } catch (timelineErr: any) {
+              console.error("[generate] Timeline generation failed:", timelineErr?.message ?? timelineErr);
+              send({ type: "timeline_error", error: timelineErr?.message ?? "Timeline generation failed" });
+            }
+          }
+        } catch (saveErr) {
+          console.error("[generate] Failed to save documents:", saveErr);
+        }
+      }
+
       res.end();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";

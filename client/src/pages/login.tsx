@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { SiteLogo } from "@/components/page-header";
 import { Link, Redirect, useSearch } from "wouter";
 import { Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth, useLogin } from "@/hooks/use-auth";
@@ -12,25 +13,10 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [view, setView] = useState<"login" | "forgot">("login");
-  const [forgotUsername, setForgotUsername] = useState("");
-  const [forgotMessage, setForgotMessage] = useState("");
   const { user, isLoading } = useAuth();
   const login = useLogin();
   const search = useSearch();
   const accessDenied = new URLSearchParams(search).get("reason") === "admin-access";
-
-  const forgotPassword = useMutation({
-    mutationFn: async (u: string) => {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: u }),
-      });
-      const data = await res.json();
-      return data.message as string;
-    },
-    onSuccess: (msg) => setForgotMessage(msg),
-  });
 
   if (isLoading) return null;
   if (user) return <Redirect to={user.role === "user" ? "/" : "/admin"} />;
@@ -40,17 +26,12 @@ export default function LoginPage() {
     login.mutate({ username, password });
   };
 
-  const handleForgotSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!forgotUsername.trim()) return;
-    forgotPassword.mutate(forgotUsername.trim());
-  };
-
   return (
     <div className="min-h-dvh bg-background text-foreground font-sans flex flex-col">
       <header className="mx-auto w-full max-w-[1100px] px-[18px] pb-2 pt-7">
         <div className="flex items-center justify-between">
           <div>
+            <SiteLogo />
             <h1 className="mb-1.5 text-[26px] font-extrabold tracking-[0.2px] text-foreground">
               Project Intake Form
             </h1>
@@ -95,9 +76,8 @@ export default function LoginPage() {
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="password">Password</Label>
-                  <Input
+                  <PasswordInput
                     id="password"
-                    type="password"
                     autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -126,45 +106,13 @@ export default function LoginPage() {
               <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
                 <Lock className="h-5 w-5 text-primary" />
               </div>
-              <CardTitle className="text-xl">Reset Password</CardTitle>
-              <CardDescription>Enter your username and we'll send a temporary password to your registered email.</CardDescription>
+              <CardTitle className="text-xl">Forgot Password</CardTitle>
+              <CardDescription>To reset your password, contact your administrator. They can generate a temporary password for you from the admin panel.</CardDescription>
             </CardHeader>
             <CardContent>
-              {forgotMessage ? (
-                <div className="space-y-4">
-                  <p className="text-sm text-foreground text-center">{forgotMessage}</p>
-                  <Button variant="outline" className="w-full" onClick={() => { setView("login"); setForgotMessage(""); setForgotUsername(""); }}>
-                    Back to Sign In
-                  </Button>
-                </div>
-              ) : (
-                <form onSubmit={handleForgotSubmit} className="grid gap-4">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="forgot-username">Username</Label>
-                    <Input
-                      id="forgot-username"
-                      type="text"
-                      autoComplete="username"
-                      value={forgotUsername}
-                      onChange={(e) => setForgotUsername(e.target.value)}
-                      required
-                    />
-                  </div>
-                  {forgotPassword.isError && (
-                    <p className="text-sm text-destructive">Something went wrong. Please try again.</p>
-                  )}
-                  <Button type="submit" className="w-full" disabled={forgotPassword.isPending}>
-                    {forgotPassword.isPending ? "Sending…" : "Send Temporary Password"}
-                  </Button>
-                  <button
-                    type="button"
-                    className="text-sm text-muted-foreground hover:text-primary text-center underline underline-offset-2 bg-transparent border-none cursor-pointer"
-                    onClick={() => setView("login")}
-                  >
-                    Back to Sign In
-                  </button>
-                </form>
-              )}
+              <Button variant="outline" className="w-full" onClick={() => setView("login")}>
+                Back to Sign In
+              </Button>
             </CardContent>
           </Card>
         )}

@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { getQueryFn, apiRequest } from "@/lib/queryClient";
 
 export function useAuth() {
-  const { data: user, isLoading } = useQuery<{ username: string; role: string } | null>({
+  const { data: user, isLoading } = useQuery<{ id: string; username: string; role: string; email: string | null; mustChangePassword: boolean } | null>({
     queryKey: ["/api/auth/me"],
     queryFn: getQueryFn({ on401: "returnNull" }),
   });
