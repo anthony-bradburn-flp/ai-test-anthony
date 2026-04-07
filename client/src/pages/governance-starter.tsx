@@ -172,7 +172,7 @@ export default function GovernanceStarterPage() {
   const { data: projects = [] } = useQuery<Project[]>({
     queryKey: ["/api/projects", selectedClientId],
     queryFn: async () => {
-      const url = selectedClientId ? `/api/projects?clientId=${selectedClientId}` : "/api/projects";
+      const url = selectedClientId ? `/api/projects?clientId=${selectedClientId}&mine=true` : "/api/projects?mine=true";
       const res = await fetch(url);
       return res.ok ? res.json() : [];
     },
