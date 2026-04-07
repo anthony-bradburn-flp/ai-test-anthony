@@ -100,7 +100,7 @@ export default function MyProjectsPage() {
     setTimelinePending(project.id);
     setTimelineError((prev) => { const next = { ...prev }; delete next[project.id]; return next; });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120_000);
+    const timeout = setTimeout(() => controller.abort(), 240_000);
     try {
       const res = await fetch(`/api/projects/${project.id}/timeline`, {
         method: "POST",
@@ -119,7 +119,7 @@ export default function MyProjectsPage() {
         ) as any,
       });
     } catch (err: any) {
-      const msg = err?.name === "AbortError" ? "Timed out — generation took too long" : (err?.message ?? "Failed");
+      const msg = err?.name === "AbortError" ? "Timed out — the sheet may still have been created in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
       setTimelineError((prev) => ({ ...prev, [project.id]: msg }));
     } finally {
       clearTimeout(timeout);
