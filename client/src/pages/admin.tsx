@@ -3,7 +3,7 @@ import { SiteLogo } from "@/components/page-header";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound, ExternalLink } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -611,7 +611,7 @@ export default function AdminPage() {
 
   // Clients tab state
   type AdminClient = { id: string; name: string; createdAt: string; createdBy: string };
-  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string; createdBy: string };
+  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string; createdBy: string; smartsheetUrl?: string | null };
   type AdminStoredDoc = { id: string; projectId: string; name: string; filename: string; format: string; fileSize: number; generatedAt: string; version: number; versionLabel: string; isLatest: boolean };
 
   const [showAddClient, setShowAddClient] = useState(false);
@@ -1502,13 +1502,22 @@ export default function AdminPage() {
                               {project.lastGeneratedAt ? new Date(project.lastGeneratedAt).toLocaleDateString("en-GB") : "—"}
                             </TableCell>
                             <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                              <Button
-                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                onClick={() => { if (confirm(`Delete project "${project.projectName}" and all its stored documents?`)) deleteProjectMutation.mutate(project.id); }}
-                                disabled={deleteProjectMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              <div className="flex items-center justify-end gap-1">
+                                {project.smartsheetUrl && (
+                                  <a href={project.smartsheetUrl} target="_blank" rel="noopener noreferrer">
+                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title="View Smartsheet timeline">
+                                      <ExternalLink className="h-4 w-4" />
+                                    </Button>
+                                  </a>
+                                )}
+                                <Button
+                                  variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                  onClick={() => { if (confirm(`Delete project "${project.projectName}" and all its stored documents?`)) deleteProjectMutation.mutate(project.id); }}
+                                  disabled={deleteProjectMutation.isPending}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </TableCell>
                           </TableRow>
                           {isExpanded && (
