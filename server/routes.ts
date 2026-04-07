@@ -800,7 +800,14 @@ export async function registerRoutes(
 
       // Tell the client the total number of documents (passthrough + AI + exec summary if not already in run)
       const execSummaryCount = !execAlreadyInRun && execSummaryTpl?.filePath && existsSync(execSummaryTpl.filePath) ? 1 : 0;
-      send({ type: "start", count: allDocNames.length + execSummaryCount, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs });
+
+      // Warn about templates that exist but have no file uploaded (fall back to AI generation without structure)
+      const missingTemplates = allDocNames.filter((n) => {
+        const tpl = findTemplate(n);
+        return tpl && (!tpl.filePath || !existsSync(tpl.filePath));
+      });
+
+      send({ type: "start", count: allDocNames.length + execSummaryCount, trainingDocAttached: !!settings.trainingDocContent, truncatedDocs, missingTemplates });
 
       // Stream passthrough docs immediately — no AI needed, just serve the template file
       for (const docName of passthroughDocNames) {

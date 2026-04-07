@@ -381,6 +381,12 @@ export default function GovernanceStarterPage() {
                 toast.warning(`${name} exceeds 15,000 character limit — only the first 15,000 characters were passed to the AI.`);
               }
             }
+            if (event.missingTemplates?.length) {
+              toast.warning(
+                `${event.missingTemplates.length} template file${event.missingTemplates.length !== 1 ? "s" : ""} not uploaded: ${event.missingTemplates.join(", ")}. These documents will be AI-generated without a template structure — upload files in Admin > Templates.`,
+                { duration: 8000 }
+              );
+            }
           } else if (event.type === "document") {
             docsReceived++;
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
