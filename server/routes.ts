@@ -530,7 +530,7 @@ export async function registerRoutes(
 
   app.get("/api/projects/mine", requireAuth, async (req, res) => {
     const session = req.session as { userId?: string; role?: string };
-    const createdBy = session.role === "admin" ? undefined : session.userId!;
+    const createdBy = session.role === "admin" || session.role === "manager" ? undefined : session.userId!;
     res.json(await storage.listProjects(undefined, createdBy));
   });
 
