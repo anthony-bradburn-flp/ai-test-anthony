@@ -1278,7 +1278,7 @@ export default function GovernanceStarterPage() {
                 Use <strong>Generate documents</strong> to submit the form and trigger document generation downstream.
               </div>
 
-              {smartsheetEnabled?.enabled && selectedProjectId && (
+              {smartsheetEnabled?.enabled && (
                 <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-background p-2.5 px-3">
                   <Checkbox
                     id="generate-timeline"
