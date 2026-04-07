@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ChevronDown, ChevronRight, Download, FileText, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, FileText, ExternalLink, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 type Project = {
@@ -29,6 +29,7 @@ export default function MyProjectsPage() {
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
   const [timelinePending, setTimelinePending] = useState<string | null>(null);
   const [timelineError, setTimelineError] = useState<Record<string, string>>({});
+  const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
 
   const isAdmin = user?.role === "admin" || user?.role === "manager";
 
@@ -93,6 +94,21 @@ export default function MyProjectsPage() {
       URL.revokeObjectURL(url);
     } catch {
       toast.error("Failed to download documents");
+    }
+  };
+
+  const deleteDoc = async (doc: StoredDocument) => {
+    if (!confirm(`Delete "${doc.name}" (${doc.versionLabel})?`)) return;
+    setDeletingDoc(doc.id);
+    try {
+      const res = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", expandedProject, "documents"] });
+      toast.success(`Deleted ${doc.name} (${doc.versionLabel})`);
+    } catch {
+      toast.error("Failed to delete document");
+    } finally {
+      setDeletingDoc(null);
     }
   };
 
@@ -246,12 +262,14 @@ export default function MyProjectsPage() {
                                     </p>
                                   )}
                                   <Link href={`/?projectId=${project.id}`}>
-                                    <Button size="sm" className="font-bold">Generate Again</Button>
+                                    <Button size="sm" className="font-bold">
+                                      {docs.length === 0 ? "Generate Documents" : "Generate Again"}
+                                    </Button>
                                   </Link>
                                 </div>
                               </div>
                               {docs.length === 0 ? (
-                                <p className="text-sm text-muted-foreground">No documents stored yet.</p>
+                                <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
                               ) : (
                                 <div className="overflow-x-auto">
                                   <table className="text-sm w-full">
@@ -272,14 +290,27 @@ export default function MyProjectsPage() {
                                             return (
                                               <td key={v} className="text-center py-2 px-2">
                                                 {doc ? (
-                                                  <Button
-                                                    size="sm" variant={doc.isLatest ? "default" : "outline"}
-                                                    className="h-7 text-xs font-semibold"
-                                                    onClick={() => downloadDoc(doc)}
-                                                  >
-                                                    <Download className="h-3 w-3 mr-1" />
-                                                    {doc.isLatest ? "Latest" : "Download"}
-                                                  </Button>
+                                                  <div className="flex items-center justify-center gap-1">
+                                                    <Button
+                                                      size="sm" variant={doc.isLatest ? "default" : "outline"}
+                                                      className="h-7 text-xs font-semibold"
+                                                      onClick={() => downloadDoc(doc)}
+                                                    >
+                                                      <Download className="h-3 w-3 mr-1" />
+                                                      {doc.isLatest ? "Latest" : "Download"}
+                                                    </Button>
+                                                    {isAdmin && (
+                                                      <Button
+                                                        size="sm" variant="ghost"
+                                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                                        disabled={deletingDoc === doc.id}
+                                                        onClick={() => deleteDoc(doc)}
+                                                        title={`Delete ${doc.name} (${doc.versionLabel})`}
+                                                      >
+                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                      </Button>
+                                                    )}
+                                                  </div>
                                                 ) : (
                                                   <span className="text-muted-foreground">—</span>
                                                 )}

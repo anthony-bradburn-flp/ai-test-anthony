@@ -711,6 +711,8 @@ export async function registerRoutes(
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.flushHeaders();
+    // Disable Nagle's algorithm so each res.write() is sent to the client immediately
+    if (res.socket) res.socket.setNoDelay(true);
 
     const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
     const generatedDocBuffers: Array<{ name: string; filename: string; format: string; buffer: Buffer }> = [];
@@ -1022,76 +1024,87 @@ export async function registerRoutes(
       }
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
-      send({ type: "done", provider: settings.provider });
 
-      // --- Persist documents against project ---
-      if (projectId && generatedDocBuffers.length > 0) {
+      // Optionally generate Smartsheet timeline — done before closing the stream so the
+      // timeline event reaches the client. DB saves happen in the background after res.end().
+      let timelineSheetId: string | null = null;
+      let timelineSheetUrl: string | null = null;
+      let timelineNewVersion: number | null = null;
+      if (generateTimeline && projectId) {
         try {
-          const projectDir = join(DOCUMENTS_DIR, projectId);
-          if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
-          const existingDocs = await storage.listDocuments(projectId);
-          const runId = randomBytes(8).toString("hex");
-
-          // Determine next version number
-          let nextVersion = 1;
-          if (existingDocs.length > 0) {
-            if (versionMode === "replace") {
-              await storage.deleteDocumentsByProject(projectId);
-            } else {
-              const maxVersion = Math.max(...existingDocs.map((d) => d.version));
-              nextVersion = maxVersion + 1;
-              await storage.markDocumentsNotLatest(projectId);
-            }
+          const project = await storage.getProject(projectId);
+          if (project) {
+            const tasks = await generateTimelineTasks(project, settings);
+            const existing = project.smartsheetId;
+            const tlResult = existing
+              ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
+              : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+            timelineSheetId = tlResult.sheetId ?? null;
+            timelineSheetUrl = tlResult.sheetUrl;
+            timelineNewVersion = ((project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
+            send({ type: "timeline", sheetUrl: timelineSheetUrl });
           }
-
-          for (const { name, filename, format, buffer } of generatedDocBuffers) {
-            const docId = randomBytes(8).toString("hex");
-            const storagePath = `documents/${projectId}/${docId}_${filename}`;
-            const fullPath = join(DATA_DIR, storagePath);
-            writeFileSync(fullPath, buffer);
-            await storage.createDocument({
-              projectId, name, filename, format,
-              storagePath, fileSize: buffer.length,
-              generatedAt: new Date().toISOString(),
-              generatedBy: req.session.userId!,
-              runId, version: nextVersion,
-              versionLabel: `v${nextVersion}`, isLatest: true,
-            });
-          }
-          await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
-
-          // Optionally generate Smartsheet timeline
-          if (generateTimeline) {
-            try {
-              const project = await storage.getProject(projectId);
-              if (project) {
-                const tasks = await generateTimelineTasks(project, settings);
-                const existing = project.smartsheetId;
-                const tlResult = existing
-                  ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
-                  : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
-                let sheetId = tlResult.sheetId;
-                let sheetUrl = tlResult.sheetUrl;
-                const newVersion = (project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0);
-                await storage.updateProject(projectId, {
-                  smartsheetId: sheetId ?? undefined,
-                  smartsheetUrl: sheetUrl,
-                  timelineGeneratedAt: new Date().toISOString(),
-                  timelineVersion: newVersion || 1,
-                });
-                send({ type: "timeline", sheetUrl });
-              }
-            } catch (timelineErr: any) {
-              console.error("[generate] Timeline generation failed:", timelineErr?.message ?? timelineErr);
-              send({ type: "timeline_error", error: timelineErr?.message ?? "Timeline generation failed" });
-            }
-          }
-        } catch (saveErr) {
-          console.error("[generate] Failed to save documents:", saveErr);
+        } catch (timelineErr: any) {
+          console.error("[generate] Timeline generation failed:", timelineErr?.message ?? timelineErr);
+          send({ type: "timeline_error", error: timelineErr?.message ?? "Timeline generation failed" });
         }
       }
 
+      send({ type: "done", provider: settings.provider });
+      // Close the stream immediately — the client exits generating state now.
+      // DB persistence happens in the background so it doesn't block the response.
       res.end();
+
+      // --- Persist documents against project (background, does not block client) ---
+      if (projectId && generatedDocBuffers.length > 0) {
+        const savedUserId = req.session.userId!;
+        (async () => {
+          try {
+            const projectDir = join(DOCUMENTS_DIR, projectId);
+            if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+            const existingDocs = await storage.listDocuments(projectId);
+            const runId = randomBytes(8).toString("hex");
+
+            // Determine next version number
+            let nextVersion = 1;
+            if (existingDocs.length > 0) {
+              if (versionMode === "replace") {
+                await storage.deleteDocumentsByProject(projectId);
+              } else {
+                const maxVersion = Math.max(...existingDocs.map((d) => d.version));
+                nextVersion = maxVersion + 1;
+                await storage.markDocumentsNotLatest(projectId);
+              }
+            }
+
+            for (const { name, filename, format, buffer } of generatedDocBuffers) {
+              const docId = randomBytes(8).toString("hex");
+              const storagePath = `documents/${projectId}/${docId}_${filename}`;
+              const fullPath = join(DATA_DIR, storagePath);
+              writeFileSync(fullPath, buffer);
+              await storage.createDocument({
+                projectId, name, filename, format,
+                storagePath, fileSize: buffer.length,
+                generatedAt: new Date().toISOString(),
+                generatedBy: savedUserId,
+                runId, version: nextVersion,
+                versionLabel: `v${nextVersion}`, isLatest: true,
+              });
+            }
+
+            const projectUpdate: Record<string, unknown> = { lastGeneratedAt: new Date().toISOString() };
+            if (timelineSheetId) projectUpdate.smartsheetId = timelineSheetId;
+            if (timelineSheetUrl) {
+              projectUpdate.smartsheetUrl = timelineSheetUrl;
+              projectUpdate.timelineGeneratedAt = new Date().toISOString();
+              projectUpdate.timelineVersion = timelineNewVersion;
+            }
+            await storage.updateProject(projectId, projectUpdate);
+          } catch (saveErr) {
+            console.error("[generate] Failed to save documents:", saveErr);
+          }
+        })();
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
       audit("GENERATE_FAILED", req, { error: message });
