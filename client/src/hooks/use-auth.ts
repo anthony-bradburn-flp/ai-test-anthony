@@ -19,7 +19,7 @@ export function useLogin() {
       return res.json();
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      queryClient.clear();
       setLocation(data.role === "user" ? "/" : "/admin");
     },
   });
@@ -33,7 +33,7 @@ export function useLogout() {
       await apiRequest("POST", "/api/auth/logout");
     },
     onSuccess: () => {
-      queryClient.setQueryData(["/api/auth/me"], null);
+      queryClient.clear();
       setLocation("/login");
     },
   });
