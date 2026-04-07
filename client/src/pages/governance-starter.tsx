@@ -392,6 +392,8 @@ export default function GovernanceStarterPage() {
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document]);
           } else if (event.type === "done") {
+            setIsGenerating(false);
+            setGeneratingStage("");
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`, {
               description: event.trainingDocAttached
