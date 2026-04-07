@@ -524,13 +524,18 @@ export async function registerRoutes(
   app.get("/api/projects", requireAuth, async (req, res) => {
     const clientId = req.query.clientId as string | undefined;
     const session = req.session as { userId?: string; role?: string };
-    const createdBy = session.role === "admin" || session.role === "manager" ? undefined : session.userId;
+    // ?mine=true forces filtering to the current user regardless of role (used by the form
+    // so admins/managers can't accidentally update someone else's project)
+    const forceMine = req.query.mine === "true";
+    const createdBy = forceMine || !(session.role === "admin" || session.role === "manager")
+      ? session.userId
+      : undefined;
     res.json(await storage.listProjects(clientId, createdBy));
   });
 
   app.get("/api/projects/mine", requireAuth, async (req, res) => {
     const session = req.session as { userId?: string; role?: string };
-    const createdBy = session.role === "admin" ? undefined : session.userId!;
+    const createdBy = session.role === "admin" || session.role === "manager" ? undefined : session.userId!;
     res.json(await storage.listProjects(undefined, createdBy));
   });
 

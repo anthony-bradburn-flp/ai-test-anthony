@@ -12,7 +12,7 @@ import { toast } from "sonner";
 
 type Project = {
   id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
-  projectType: string; createdAt: string; lastGeneratedAt?: string;
+  projectType: string; createdAt: string; lastGeneratedAt?: string; createdBy: string;
   smartsheetId?: string | null; smartsheetUrl?: string | null; timelineGeneratedAt?: string | null;
 };
 type StoredDocument = {
@@ -61,11 +61,16 @@ export default function MyProjectsPage() {
 
   const clients = Array.from(new Map(projects.map((p) => [p.clientId, p.clientName])).entries());
 
-  const filtered = projects.filter((p) => {
+  const applyFilters = (list: Project[]) => list.filter((p) => {
     if (clientFilter !== "__all__" && p.clientId !== clientFilter) return false;
     if (search && !p.projectName.toLowerCase().includes(search.toLowerCase()) && !p.sheetRef.toLowerCase().includes(search.toLowerCase()) && !p.clientName.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
+
+  // For admin/manager: split into own vs others. For regular users: just own.
+  const myProjects = applyFilters(projects.filter((p) => p.createdBy === user?.id));
+  const otherProjects = isAdmin ? applyFilters(projects.filter((p) => p.createdBy !== user?.id)) : [];
+  const allFiltered = isAdmin ? [...myProjects, ...otherProjects] : myProjects;
 
   const downloadDoc = async (doc: StoredDocument) => {
     try {
@@ -151,6 +156,144 @@ export default function MyProjectsPage() {
   }, {});
   const versions = Array.from(new Set(docs.map((d) => d.version))).sort((a, b) => a - b);
 
+  const renderProjectRows = (list: Project[]) => list.map((project) => {
+    const isExpanded = expandedProject === project.id;
+    return (
+      <>
+        <TableRow
+          key={project.id}
+          className="cursor-pointer hover:bg-muted/50"
+          onClick={() => setExpandedProject(isExpanded ? null : project.id)}
+        >
+          <TableCell>
+            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </TableCell>
+          <TableCell className="font-mono text-sm">{project.sheetRef}</TableCell>
+          <TableCell className="font-medium">{project.projectName}</TableCell>
+          <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
+          <TableCell className="text-muted-foreground">{project.projectType}</TableCell>
+          <TableCell className="text-muted-foreground text-sm">
+            {project.lastGeneratedAt ? new Date(project.lastGeneratedAt).toLocaleDateString("en-GB") : "—"}
+          </TableCell>
+        </TableRow>
+        {isExpanded && (
+          <TableRow key={`${project.id}-docs`}>
+            <TableCell colSpan={6} className="p-0 bg-muted/30">
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-semibold">Documents</p>
+                  <div className="flex gap-2 flex-wrap justify-end">
+                    {docs.length > 0 && (
+                      <Button size="sm" variant="outline" className="font-bold" onClick={() => downloadAll(project.id)}>
+                        <Download className="h-3.5 w-3.5 mr-1" /> Download All
+                      </Button>
+                    )}
+                    {smartsheetEnabled?.enabled && (
+                      project.smartsheetId ? (
+                        <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "update")}>
+                          <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Updating…" : "Update Timeline"}
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "new")}>
+                          <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Creating…" : "Create Timeline"}
+                        </Button>
+                      )
+                    )}
+                    {project.smartsheetUrl && (
+                      <a href={project.smartsheetUrl} target="_blank" rel="noopener noreferrer">
+                        <Button size="sm" variant="ghost" className="font-bold">
+                          <ExternalLink className="h-3.5 w-3.5 mr-1" /> View Sheet
+                        </Button>
+                      </a>
+                    )}
+                    {timelineError[project.id] && (
+                      <p className="text-xs text-destructive mt-1 w-full">
+                        Timeline failed: {timelineError[project.id]}
+                      </p>
+                    )}
+                    <Link href={`/?projectId=${project.id}`}>
+                      <Button size="sm" className="font-bold">
+                        {docs.length === 0 ? "Generate Documents" : "Generate Again"}
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+                {docs.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="text-sm w-full">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left py-2 pr-4 font-semibold">Document</th>
+                          {versions.map((v) => (
+                            <th key={v} className="text-center py-2 px-2 font-semibold">v{v}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(docsByName).map(([name, docVersions]) => (
+                          <tr key={name} className="border-b border-border/50 last:border-0">
+                            <td className="py-2 pr-4 font-medium">{name}</td>
+                            {versions.map((v) => {
+                              const doc = docVersions.find((d) => d.version === v);
+                              return (
+                                <td key={v} className="text-center py-2 px-2">
+                                  {doc ? (
+                                    <div className="flex items-center justify-center gap-1">
+                                      <Button
+                                        size="sm" variant={doc.isLatest ? "default" : "outline"}
+                                        className="h-7 text-xs font-semibold"
+                                        onClick={() => downloadDoc(doc)}
+                                      >
+                                        <Download className="h-3 w-3 mr-1" />
+                                        {doc.isLatest ? "Latest" : "Download"}
+                                      </Button>
+                                      {isAdmin && (
+                                        <Button
+                                          size="sm" variant="ghost"
+                                          className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                          disabled={deletingDoc === doc.id}
+                                          onClick={() => deleteDoc(doc)}
+                                          title={`Delete ${doc.name} (${doc.versionLabel})`}
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </Button>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </TableCell>
+          </TableRow>
+        )}
+      </>
+    );
+  });
+
+  const tableHeader = (
+    <TableHeader>
+      <TableRow className="bg-muted">
+        <TableHead className="w-8"></TableHead>
+        <TableHead className="font-bold">Sheet Ref</TableHead>
+        <TableHead className="font-bold">Project Name</TableHead>
+        <TableHead className="font-bold">Client</TableHead>
+        <TableHead className="font-bold">Type</TableHead>
+        <TableHead className="font-bold">Last Generated</TableHead>
+      </TableRow>
+    </TableHeader>
+  );
+
   return (
     <div className="min-h-dvh bg-background text-foreground font-sans">
       <header className="mx-auto max-w-[1100px] px-[18px] pb-2 pt-7">
@@ -170,7 +313,7 @@ export default function MyProjectsPage() {
       </header>
 
       <main className="mx-auto max-w-[1100px] px-[18px] pb-12 pt-6">
-        <div className="flex gap-3 mb-4 flex-wrap">
+        <div className="flex gap-3 mb-6 flex-wrap">
           <Input
             placeholder="Search projects…"
             value={search}
@@ -186,151 +329,47 @@ export default function MyProjectsPage() {
           </Select>
         </div>
 
-        {filtered.length === 0 ? (
+        {allFiltered.length === 0 ? (
           <div className="text-center py-16 text-muted-foreground">
             <FileText className="h-12 w-12 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No projects yet</p>
             <p className="text-sm mt-1">Generate documents from the form to see them here.</p>
           </div>
+        ) : isAdmin ? (
+          <div className="space-y-8">
+            {/* My projects section */}
+            <div>
+              <h2 className="text-base font-bold mb-2">My Projects</h2>
+              {myProjects.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">No projects created by you yet.</p>
+              ) : (
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <Table>
+                    {tableHeader}
+                    <TableBody>{renderProjectRows(myProjects)}</TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            {/* Other team members' projects */}
+            {otherProjects.length > 0 && (
+              <div>
+                <h2 className="text-base font-bold mb-2 text-muted-foreground">Team Projects</h2>
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <Table>
+                    {tableHeader}
+                    <TableBody>{renderProjectRows(otherProjects)}</TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="rounded-xl border border-border overflow-hidden">
             <Table>
-              <TableHeader>
-                <TableRow className="bg-muted">
-                  <TableHead className="w-8"></TableHead>
-                  <TableHead className="font-bold">Sheet Ref</TableHead>
-                  <TableHead className="font-bold">Project Name</TableHead>
-                  <TableHead className="font-bold">Client</TableHead>
-                  <TableHead className="font-bold">Type</TableHead>
-                  <TableHead className="font-bold">Last Generated</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((project) => {
-                  const isExpanded = expandedProject === project.id;
-                  return (
-                    <>
-                      <TableRow
-                        key={project.id}
-                        className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => setExpandedProject(isExpanded ? null : project.id)}
-                      >
-                        <TableCell>
-                          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </TableCell>
-                        <TableCell className="font-mono text-sm">{project.sheetRef}</TableCell>
-                        <TableCell className="font-medium">{project.projectName}</TableCell>
-                        <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
-                        <TableCell className="text-muted-foreground">{project.projectType}</TableCell>
-                        <TableCell className="text-muted-foreground text-sm">
-                          {project.lastGeneratedAt ? new Date(project.lastGeneratedAt).toLocaleDateString("en-GB") : "—"}
-                        </TableCell>
-                      </TableRow>
-                      {isExpanded && (
-                        <TableRow key={`${project.id}-docs`}>
-                          <TableCell colSpan={6} className="p-0 bg-muted/30">
-                            <div className="p-4">
-                              <div className="flex items-center justify-between mb-3">
-                                <p className="text-sm font-semibold">Documents</p>
-                                <div className="flex gap-2 flex-wrap justify-end">
-                                  {docs.length > 0 && (
-                                    <Button size="sm" variant="outline" className="font-bold" onClick={() => downloadAll(project.id)}>
-                                      <Download className="h-3.5 w-3.5 mr-1" /> Download All
-                                    </Button>
-                                  )}
-                                  {smartsheetEnabled?.enabled && (
-                                    project.smartsheetId ? (
-                                      <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "update")}>
-                                        <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Updating…" : "Update Timeline"}
-                                      </Button>
-                                    ) : (
-                                      <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "new")}>
-                                        <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Creating…" : "Create Timeline"}
-                                      </Button>
-                                    )
-                                  )}
-                                  {project.smartsheetUrl && (
-                                    <a href={project.smartsheetUrl} target="_blank" rel="noopener noreferrer">
-                                      <Button size="sm" variant="ghost" className="font-bold">
-                                        <ExternalLink className="h-3.5 w-3.5 mr-1" /> View Sheet
-                                      </Button>
-                                    </a>
-                                  )}
-                                  {timelineError[project.id] && (
-                                    <p className="text-xs text-destructive mt-1 w-full">
-                                      Timeline failed: {timelineError[project.id]}
-                                    </p>
-                                  )}
-                                  <Link href={`/?projectId=${project.id}`}>
-                                    <Button size="sm" className="font-bold">
-                                      {docs.length === 0 ? "Generate Documents" : "Generate Again"}
-                                    </Button>
-                                  </Link>
-                                </div>
-                              </div>
-                              {docs.length === 0 ? (
-                                <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
-                              ) : (
-                                <div className="overflow-x-auto">
-                                  <table className="text-sm w-full">
-                                    <thead>
-                                      <tr className="border-b border-border">
-                                        <th className="text-left py-2 pr-4 font-semibold">Document</th>
-                                        {versions.map((v) => (
-                                          <th key={v} className="text-center py-2 px-2 font-semibold">v{v}</th>
-                                        ))}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {Object.entries(docsByName).map(([name, docVersions]) => (
-                                        <tr key={name} className="border-b border-border/50 last:border-0">
-                                          <td className="py-2 pr-4 font-medium">{name}</td>
-                                          {versions.map((v) => {
-                                            const doc = docVersions.find((d) => d.version === v);
-                                            return (
-                                              <td key={v} className="text-center py-2 px-2">
-                                                {doc ? (
-                                                  <div className="flex items-center justify-center gap-1">
-                                                    <Button
-                                                      size="sm" variant={doc.isLatest ? "default" : "outline"}
-                                                      className="h-7 text-xs font-semibold"
-                                                      onClick={() => downloadDoc(doc)}
-                                                    >
-                                                      <Download className="h-3 w-3 mr-1" />
-                                                      {doc.isLatest ? "Latest" : "Download"}
-                                                    </Button>
-                                                    {isAdmin && (
-                                                      <Button
-                                                        size="sm" variant="ghost"
-                                                        className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                                                        disabled={deletingDoc === doc.id}
-                                                        onClick={() => deleteDoc(doc)}
-                                                        title={`Delete ${doc.name} (${doc.versionLabel})`}
-                                                      >
-                                                        <Trash2 className="h-3.5 w-3.5" />
-                                                      </Button>
-                                                    )}
-                                                  </div>
-                                                ) : (
-                                                  <span className="text-muted-foreground">—</span>
-                                                )}
-                                              </td>
-                                            );
-                                          })}
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </>
-                  );
-                })}
-              </TableBody>
+              {tableHeader}
+              <TableBody>{renderProjectRows(myProjects)}</TableBody>
             </Table>
           </div>
         )}

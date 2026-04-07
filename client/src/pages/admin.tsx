@@ -611,7 +611,7 @@ export default function AdminPage() {
 
   // Clients tab state
   type AdminClient = { id: string; name: string; createdAt: string; createdBy: string };
-  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string };
+  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string; createdBy: string };
   type AdminStoredDoc = { id: string; projectId: string; name: string; filename: string; format: string; fileSize: number; generatedAt: string; version: number; versionLabel: string; isLatest: boolean };
 
   const [showAddClient, setShowAddClient] = useState(false);
@@ -708,6 +708,8 @@ export default function AdminPage() {
     },
     onError: (err: Error) => toast.error(err.message),
   });
+
+  const userById = new Map((usersData ?? []).map((u) => [u.id, u.username]));
 
   const downloadAdminDoc = async (doc: AdminStoredDoc) => {
     try {
@@ -1479,6 +1481,7 @@ export default function AdminPage() {
                       <TableHead className="font-bold text-foreground">Project Name</TableHead>
                       <TableHead className="font-bold text-foreground">Client</TableHead>
                       <TableHead className="font-bold text-foreground">Type</TableHead>
+                      <TableHead className="font-bold text-foreground">Created By</TableHead>
                       <TableHead className="font-bold text-foreground">Last Generated</TableHead>
                       <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
                     </TableRow>
@@ -1494,6 +1497,7 @@ export default function AdminPage() {
                             <TableCell className="font-medium">{project.projectName}</TableCell>
                             <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
                             <TableCell className="text-muted-foreground">{project.projectType}</TableCell>
+                            <TableCell className="text-muted-foreground text-sm">{userById.get(project.createdBy) ?? "—"}</TableCell>
                             <TableCell className="text-muted-foreground text-sm">
                               {project.lastGeneratedAt ? new Date(project.lastGeneratedAt).toLocaleDateString("en-GB") : "—"}
                             </TableCell>
@@ -1509,7 +1513,7 @@ export default function AdminPage() {
                           </TableRow>
                           {isExpanded && (
                             <TableRow key={`${project.id}-docs`}>
-                              <TableCell colSpan={7} className="p-0 bg-muted/30">
+                              <TableCell colSpan={8} className="p-0 bg-muted/30">
                                 <div className="p-4">
                                   <p className="text-sm font-semibold mb-2">Stored Documents</p>
                                   {adminExpandedDocs.length === 0 ? (
