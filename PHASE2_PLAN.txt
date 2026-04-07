@@ -176,6 +176,12 @@ ADMIN UI CHANGES
     - Click row -> expand to show stored documents with download links
     - Delete project (with confirmation, lists docs that will be removed)
 
+  Templates tab (existing — enhancements)
+    - Add download button per template row (admin + manager roles)
+    - Downloads the current template file as-is from disk
+    - Allows admins/managers to review the exact file being used for generation
+    - Endpoint: GET /api/admin/templates/:id/download  (streams filePath from disk)
+
 
 STORAGE SERVICE ADDITIONS (IStorage interface)
 ----------------------------------------------
@@ -223,26 +229,235 @@ IMPLEMENTATION SEQUENCE
      Serve stored files via /api/documents/:id/download.
 
 
-KEY DECISIONS TO MAKE
-----------------------
+DOCUMENT VERSIONING
+--------------------
 
-  #  Decision                       Options / Notes
+  Trigger: User selects an existing project that already has stored documents
+  and submits the generate form.
+
+  Modal prompt before generation:
+    "This project already has documents"
+    - Replace existing  → delete current docs, save new run as v1 (clean slate)
+    - Save as new version → keep existing, save new run as v(n+1)
+
+  StoredDocument additions:
+    version      : number    (1, 2, 3...)
+    versionLabel : string    ("v1", "v2" or custom e.g. "Post-Discovery")
+    isLatest     : boolean   (true on the most recent version per document type)
+    runId        : string    (uuid — groups all docs from the same generation run)
+
+  Behaviour:
+    - First generation       → all docs saved as v1, isLatest: true
+    - Replace                → existing docs deleted, new docs saved as v1
+    - New version            → existing docs unchanged, new docs saved as v(n+1),
+                               isLatest flipped on affected document types
+
+  Document list display (grouped by type, columns per version):
+    Document       | v1       | v2       | v3 (latest)
+    ---------------+----------+----------+------------
+    RACI           | download | download | download
+    RAID Log       | download | —        | download
+    Latest version highlighted.
+
+
+USER DOCUMENT HISTORY VIEW (/my-projects)
+------------------------------------------
+
+  Accessible to all logged-in users (not just admin/manager).
+  Shows only projects where createdBy === currentUser.id.
+  Admin users see all projects with a "Show all users" toggle.
+
+  Layout:
+    My Projects
+    [ Search... ]  [ Filter by client ▾ ]
+
+    Sheet Ref | Project Name | Client | Type | Last Run | Docs
+    ----------+--------------+--------+------+----------+-----
+    SM025     | Rebrand      | Acme   | Web  | Today    | 7 ↓
+    AB012     | App MVP      | ACME   | App  | Mar 28   | 5 ↓
+
+  Row expand → documents grouped by version, download per doc per version.
+  "Generate again" button → opens form pre-filled with project data.
+  No edit/delete controls (admin-only).
+
+  Navigation:
+    Add "My Projects" link to form header nav, visible to all logged-in users.
+
+
+KEY DECISIONS (RESOLVED)
+-------------------------
+
+  #  Decision                       Resolution
   -  ----------------------------   -----------------------------------------------
-  1  Re-generation behaviour        Replace all docs for the project?
-                                    Keep history with timestamps?
-                                    Recommended: replace by packageId, keep history
-                                    by run (each run gets a generatedAt timestamp).
+  1  Re-generation behaviour        Modal prompt: Replace or New Version.
+                                    Version tracked on StoredDocument (v1, v2...).
+                                    Replace deletes files (confirmed in modal).
 
-  2  Project editability            Can stakeholders/milestones be edited after
-                                    creation, or only via re-generate?
+  2  Project editability            Editable via re-generate (pre-fill flow).
+                                    No separate edit form needed initially.
 
-  3  Client delete cascade          Block delete if projects exist, or cascade?
+  3  Client delete cascade          Block delete if projects exist.
 
-  4  Disk management                No current cleanup. Add a max doc retention
-                                    policy or leave as manual admin task?
+  4  Disk management                No auto-cleanup. Manual admin task for now.
+                                    Max versions: no limit initially.
 
-  5  Form UX for new project        Inline create (faster, more complex state) vs.
-                                    separate "New Project" page (simpler, extra step).
+  5  Form UX for new project        Inline create (client + project selects with
+                                    "+ New" option triggering small modal/popover).
+
+  6  Version label                  Auto (v1, v2...) with optional custom label
+                                    entered in the version modal.
+
+  7  User history scope             createdBy filter for standard users.
+                                    Admins see all with toggle.
+
 
 ================================================
-Generated: 2026-03-31
+PHASE 2.1: SMARTSHEET TIMELINE GENERATION
+==========================================
+
+OVERVIEW
+--------
+
+  AI-generated project timeline written directly to Smartsheet via REST API.
+  Uses SOW dates, billing milestones, and project type to generate a phased
+  task list. Optional — user opts in per generation run.
+
+
+TRIGGER POINTS
+--------------
+
+  1. Generate form — checkbox "Generate Smartsheet timeline"
+       - Shown only when SMARTSHEET_API_KEY is configured in the app
+       - Unchecked by default
+       - When checked: timeline is created alongside documents
+
+  2. My Projects view — per-project timeline button
+       - No timeline yet      → "Create Timeline" button
+       - Timeline exists      → "Update Timeline" button
+       - Docs re-versioned    → "Update Timeline" with indicator
+         "Documents updated since last timeline"
+
+
+DATA MODEL ADDITIONS
+--------------------
+
+  Project additions:
+    smartsheetId        : string | null   (sheet ID once created)
+    smartsheetUrl       : string | null   (direct link to sheet)
+    timelineGeneratedAt : string | null   (ISO date of last timeline write)
+    timelineVersion     : number          (increments on each update)
+
+
+SMARTSHEET API APPROACH
+-----------------------
+
+  - Single service account API key stored in SSM as
+    "/pm-governance/smartsheet-api-key"
+  - App calls Smartsheet REST API directly (no MCP — MCP is Claude Desktop only)
+  - Node SDK: smartsheet-javascript-sdk (npm package)
+
+  First generation:
+    POST /sheets  →  creates new sheet named "{SheetRef} - {ProjectName} Timeline"
+    Store returned sheetId + permalink against project record
+
+  Re-generation (Update):
+    GET  /sheets/{id}/rows  →  fetch existing rows
+    DELETE existing task rows (keep header row)
+    POST /sheets/{id}/rows  →  write new AI-generated tasks
+
+  Re-generation (New Version):
+    POST /sheets  →  new sheet named "{SheetRef} - Timeline v2"
+    Store new sheetId, increment timelineVersion
+
+  Sheet structure (columns):
+    Task Name | Phase | Start Date | End Date | Duration (days) |
+    Owner | Status | Notes
+
+  AI generates task list from:
+    - projectType, startDate, endDate
+    - billingMilestones (anchors phases to milestone dates)
+    - summary (context for task names)
+    - flipsideStakeholders (owner assignments)
+
+
+ADMIN SETTINGS ADDITION
+------------------------
+
+  New field in AI Settings tab:
+    Smartsheet API Key  [password input]  [Save]
+    Status indicator: "Connected — service account: user@example.com"
+                   or "Not configured"
+
+  Stored in SSM as "/pm-governance/smartsheet-api-key"
+  Verified on save by calling GET /users/me on Smartsheet API
+
+
+IMPLEMENTATION SEQUENCE
+------------------------
+
+  1. Add SMARTSHEET_API_KEY to secrets.ts loader
+  2. Add smartsheet-javascript-sdk to dependencies
+  3. Add smartsheetId / smartsheetUrl / timelineGeneratedAt / timelineVersion
+     to Project type in storage.ts
+  4. Add POST /api/projects/:id/timeline route (create or update)
+  5. Add Smartsheet API key field to admin AI settings UI
+  6. Add "Generate Smartsheet timeline" checkbox to generate form
+     (hidden when key not configured)
+  7. Add "Create/Update Timeline" button to My Projects view
+  8. Add timeline sheet URL as a clickable link in My Projects view
+
+
+KEY DECISIONS (RESOLVED)
+-------------------------
+
+  1  Opt-in per run         Checkbox on form. Off by default.
+  2  Single API key         Service account key stored in SSM.
+                            All users share it — activity appears as
+                            service account in Smartsheet audit log.
+  3  Re-generation options  "Update existing sheet" (replaces rows) or
+                            "New version" (new sheet, increments version).
+  4  Timeline access        URL stored on project, shown in My Projects
+                            as a direct link to open in Smartsheet.
+  5  MCP not used           App calls Smartsheet REST API directly.
+                            MCP is only for Claude Desktop.
+
+
+SMARTSHEET SETUP INSTRUCTIONS (FOR ADMIN)
+------------------------------------------
+
+  Step 1 — Create a Smartsheet account (or use existing)
+    Use a shared/service account email (e.g. pm-governance@yourcompany.com)
+    rather than a personal account so the integration isn't tied to one person.
+
+  Step 2 — Generate an API key
+    1. Log in to Smartsheet
+    2. Click your avatar (top right) → Apps & Integrations
+    3. Select "API Access"
+    4. Click "Generate new access token"
+    5. Name it "PM Governance App"
+    6. Copy the token — it is only shown once
+
+  Step 3 — Create a destination workspace (recommended)
+    1. In Smartsheet, create a new Workspace named "PM Governance Timelines"
+    2. Share it with the service account if using a separate account
+    3. All generated timelines will appear here (optional — app can use
+       the account root if no workspace is configured)
+
+  Step 4 — Add the API key to the app
+    Option A (SSM — recommended for prod):
+      aws ssm put-parameter \
+        --name "/pm-governance/smartsheet-api-key" \
+        --value "YOUR_TOKEN" \
+        --type "SecureString" \
+        --region us-east-1
+
+    Option B (staging .env):
+      Add SMARTSHEET_API_KEY=YOUR_TOKEN to ~/ai-test-anthony/client/.env
+      and ~/ai-test-anthony/.env, then rebuild.
+
+  Step 5 — Verify in the app
+    Admin → AI Settings → Smartsheet section should show
+    "Connected — service account: [email]"
+
+================================================
+Updated: 2026-04-01

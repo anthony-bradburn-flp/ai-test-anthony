@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect } from "react";
+import { SiteLogo } from "@/components/page-header";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -34,6 +36,7 @@ type ApiUser = {
   username: string;
   email: string | null;
   role: string;
+  mustChangePassword: boolean;
 };
 
 // Mock Data
@@ -90,6 +93,7 @@ type AiSettingsResponse = {
   trainingDocFilename: string | null;
   trainingDocUploadedAt: string | null;
   trainingDocSize: number | null;
+  smartsheetWorkspaceId: string | null;
 };
 
 function SectionCard({
@@ -165,6 +169,7 @@ export default function AdminPage() {
   const queryClient = useQueryClient();
   const [systemPrompt, setSystemPrompt] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [smartsheetWorkspaceId, setSmartsheetWorkspaceId] = useState("");
   const [showDocContent, setShowDocContent] = useState(false);
   const [docContentPreview, setDocContentPreview] = useState<string | null>(null);
   const trainingDocInputRef = useRef<HTMLInputElement>(null);
@@ -214,6 +219,22 @@ export default function AdminPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       toast.success("User deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/admin/users/${id}/reset-password`, { method: "POST" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to reset password"); }
+      return res.json() as Promise<{ ok: boolean; emailed: boolean; tempPassword?: string }>;
+    },
+    onSuccess: (data) => {
+      if (data.emailed) {
+        toast.success("Password reset — temporary password emailed to user");
+      } else {
+        toast.success(`Temporary password: ${data.tempPassword}`, { duration: 30000, description: "Share this with the user — it won't be shown again." });
+      }
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -483,6 +504,15 @@ export default function AdminPage() {
     });
   };
 
+  const { data: smartsheetStatus, refetch: refetchSmartsheetStatus } = useQuery<{ connected: boolean; email?: string; error?: string; reason?: string }>({
+    queryKey: ["/api/smartsheet/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/smartsheet/status");
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
   const { data: aiSettings } = useQuery<AiSettingsResponse>({
     queryKey: ["/api/admin/ai-settings"],
     queryFn: async () => {
@@ -498,12 +528,13 @@ export default function AdminPage() {
     if (aiSettings) {
       setSystemPrompt(aiSettings.systemPrompt);
       setCompanyName(aiSettings.companyName);
+      setSmartsheetWorkspaceId(aiSettings.smartsheetWorkspaceId ?? "");
     }
   }, [aiSettings]);
 
   const saveSettingsMutation = useMutation({
     mutationFn: async () => {
-      const body: Record<string, string> = { systemPrompt, companyName };
+      const body: Record<string, string | null> = { systemPrompt, companyName, smartsheetWorkspaceId: smartsheetWorkspaceId.trim() || null };
       const res = await fetch("/api/admin/ai-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -578,12 +609,135 @@ export default function AdminPage() {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  // Clients tab state
+  type AdminClient = { id: string; name: string; createdAt: string; createdBy: string };
+  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string };
+  type AdminStoredDoc = { id: string; projectId: string; name: string; filename: string; format: string; fileSize: number; generatedAt: string; version: number; versionLabel: string; isLatest: boolean };
+
+  const [showAddClient, setShowAddClient] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [editingClientId, setEditingClientId] = useState<string | null>(null);
+  const [editClientName, setEditClientName] = useState("");
+  const [projectClientFilter, setProjectClientFilter] = useState("__all__");
+  const [expandedAdminProject, setExpandedAdminProject] = useState<string | null>(null);
+
+  const { data: clientsData = [], isLoading: clientsLoading } = useQuery<AdminClient[]>({
+    queryKey: ["/api/clients"],
+    queryFn: async () => {
+      const res = await fetch("/api/clients");
+      return res.ok ? res.json() : [];
+    },
+  });
+
+  const { data: adminProjects = [], isLoading: adminProjectsLoading } = useQuery<AdminProject[]>({
+    queryKey: ["/api/projects"],
+    queryFn: async () => {
+      const res = await fetch("/api/projects");
+      return res.ok ? res.json() : [];
+    },
+  });
+
+  const { data: adminExpandedDocs = [] } = useQuery<AdminStoredDoc[]>({
+    queryKey: ["/api/projects", expandedAdminProject, "documents"],
+    queryFn: async () => {
+      if (!expandedAdminProject) return [];
+      const res = await fetch(`/api/projects/${expandedAdminProject}/documents`);
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!expandedAdminProject,
+  });
+
+  const createClientMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await fetch("/api/clients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to create client"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setShowAddClient(false);
+      setNewClientName("");
+      toast.success("Client created");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const updateClientMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const res = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to update client"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setEditingClientId(null);
+      toast.success("Client updated");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteClientMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/clients/${id}`, { method: "DELETE" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to delete client"); }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      toast.success("Client deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const deleteProjectMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to delete project"); }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      if (expandedAdminProject) setExpandedAdminProject(null);
+      toast.success("Project deleted");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const downloadAdminDoc = async (doc: AdminStoredDoc) => {
+    try {
+      const res = await fetch(`/api/documents/${doc.id}/download`);
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = doc.filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Failed to download document");
+    }
+  };
+
+  const filteredAdminProjects = adminProjects.filter((p) =>
+    projectClientFilter === "__all__" || p.clientId === projectClientFilter
+  );
+
+  const projectsPerClient = adminProjects.reduce<Record<string, number>>((acc, p) => {
+    acc[p.clientId] = (acc[p.clientId] || 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <div className="min-h-dvh bg-background text-foreground font-sans selection:bg-primary/30">
       <header className="mx-auto max-w-[1100px] px-[18px] pb-4 pt-7 border-b border-border">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
+            <SiteLogo />
             <div className="flex items-center gap-2 mb-1.5">
               <Settings className="h-6 w-6 text-primary" />
               <h1 className="text-[26px] font-extrabold tracking-[0.2px] text-foreground m-0 leading-none">
@@ -600,6 +754,9 @@ export default function AdminPage() {
                 Back to Form
               </Button>
             </Link>
+            <Link href="/account">
+              <Button variant="outline" className="font-bold">My Account</Button>
+            </Link>
             <Button variant="ghost" className="font-bold" onClick={() => logout.mutate()}>
               Sign Out
             </Button>
@@ -609,7 +766,7 @@ export default function AdminPage() {
 
       <main className="mx-auto max-w-[1100px] px-[18px] pb-[42px] pt-8">
         <Tabs defaultValue="packages" className="w-full">
-          <TabsList className="grid w-full grid-cols-4 max-w-[800px] mb-8 bg-muted/40 p-1 rounded-[10px] h-auto border border-border/50">
+          <TabsList className="grid w-full grid-cols-6 mb-8 bg-muted/40 p-1 rounded-[10px] h-auto border border-border/50">
             <TabsTrigger value="packages" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
               <Package className="h-4 w-4 mr-2" />
               Packages
@@ -617,6 +774,14 @@ export default function AdminPage() {
             <TabsTrigger value="templates" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
               <FileText className="h-4 w-4 mr-2" />
               Templates
+            </TabsTrigger>
+            <TabsTrigger value="clients" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
+              <Building2 className="h-4 w-4 mr-2" />
+              Clients
+            </TabsTrigger>
+            <TabsTrigger value="projects" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
+              <FolderOpen className="h-4 w-4 mr-2" />
+              Projects
             </TabsTrigger>
             <TabsTrigger value="users" className="font-semibold py-2.5 text-muted-foreground hover:text-foreground hover:bg-muted/80 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm transition-all rounded-md">
               <Users className="h-4 w-4 mr-2" />
@@ -941,6 +1106,16 @@ export default function AdminPage() {
                         <TableCell className="text-sm text-muted-foreground">{tpl.lastUpdated}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            {tpl.originalFilename && (
+                              <Button
+                                variant="ghost" size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-primary"
+                                onClick={() => window.open(`/api/admin/templates/${tpl.id}/download`, "_blank")}
+                              >
+                                <Download className="h-3.5 w-3.5 mr-1" />
+                                Download
+                              </Button>
+                            )}
                             <Button
                               variant="ghost" size="sm"
                               className="h-8 px-2 text-xs text-muted-foreground hover:text-primary"
@@ -1013,9 +1188,8 @@ export default function AdminPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="new-password">Password <span className="text-destructive">*</span></Label>
-                      <Input
+                      <PasswordInput
                         id="new-password"
-                        type="password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         placeholder="Temporary password"
@@ -1090,7 +1264,7 @@ export default function AdminPage() {
                                 </div>
                                 <div className="space-y-1.5">
                                   <Label htmlFor="edit-password">New Password</Label>
-                                  <Input id="edit-password" type="password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="Leave blank to keep current" />
+                                  <PasswordInput id="edit-password" value={editPassword} onChange={(e) => setEditPassword(e.target.value)} placeholder="Leave blank to keep current" />
                                 </div>
                                 <div className="space-y-1.5">
                                   <Label>Role</Label>
@@ -1131,7 +1305,14 @@ export default function AdminPage() {
                     }
                     return (
                       <TableRow key={u.id}>
-                        <TableCell className="font-semibold">{u.username}</TableCell>
+                        <TableCell className="font-semibold">
+                          <div className="flex items-center gap-2">
+                            {u.username}
+                            {u.mustChangePassword && (
+                              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Must change password</span>
+                            )}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{u.email ?? "—"}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={cn("font-medium bg-background capitalize", u.role === "admin" && "border-primary text-primary")}>
@@ -1143,6 +1324,16 @@ export default function AdminPage() {
                             {canEdit && (
                               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => startEditing(u)}>
                                 <Edit2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {canEdit && !isSelf && (
+                              <Button
+                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-amber-600"
+                                title="Reset password"
+                                onClick={() => { if (confirm(`Reset password for "${u.username}"? A temporary password will be generated.`)) resetPasswordMutation.mutate(u.id); }}
+                                disabled={resetPasswordMutation.isPending}
+                              >
+                                <KeyRound className="h-4 w-4" />
                               </Button>
                             )}
                             {canEdit && !isSelf && (
@@ -1163,6 +1354,192 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
+            </SectionCard>
+          </TabsContent>
+
+          <TabsContent value="clients" className="space-y-6">
+            <SectionCard
+              title="Clients"
+              description="Manage client organisations linked to projects."
+              action={
+                !showAddClient && (
+                  <Button size="sm" className="font-bold bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setShowAddClient(true)}>
+                    <Plus className="h-4 w-4 mr-1" /> Add Client
+                  </Button>
+                )
+              }
+            >
+              {showAddClient && (
+                <form
+                  onSubmit={(e) => { e.preventDefault(); if (newClientName.trim()) createClientMutation.mutate(newClientName.trim()); }}
+                  className="p-5 border-b border-border space-y-3 bg-muted/20"
+                >
+                  <h3 className="text-sm font-semibold">New Client</h3>
+                  <div className="flex gap-2 items-end">
+                    <div className="space-y-1.5 flex-1">
+                      <Label htmlFor="new-client-name">Client Name <span className="text-destructive">*</span></Label>
+                      <Input id="new-client-name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} placeholder="e.g. Acme Corp" required />
+                    </div>
+                    <Button type="submit" size="sm" className="font-bold" disabled={createClientMutation.isPending}>
+                      {createClientMutation.isPending ? "Creating…" : "Create"}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => { setShowAddClient(false); setNewClientName(""); }}>Cancel</Button>
+                  </div>
+                </form>
+              )}
+              {clientsLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
+              ) : clientsData.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">No clients yet. Add one above.</div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted">
+                    <TableRow>
+                      <TableHead className="font-bold text-foreground">Name</TableHead>
+                      <TableHead className="font-bold text-foreground">Projects</TableHead>
+                      <TableHead className="font-bold text-foreground">Created</TableHead>
+                      <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {clientsData.map((client) => {
+                      if (editingClientId === client.id) {
+                        return (
+                          <TableRow key={client.id}>
+                            <TableCell colSpan={4}>
+                              <form
+                                onSubmit={(e) => { e.preventDefault(); if (editClientName.trim()) updateClientMutation.mutate({ id: client.id, name: editClientName.trim() }); }}
+                                className="flex gap-2 items-center"
+                              >
+                                <Input value={editClientName} onChange={(e) => setEditClientName(e.target.value)} className="max-w-xs" required />
+                                <Button type="submit" size="sm" className="font-bold" disabled={updateClientMutation.isPending}>
+                                  {updateClientMutation.isPending ? "Saving…" : "Save"}
+                                </Button>
+                                <Button type="button" variant="outline" size="sm" onClick={() => setEditingClientId(null)}>Cancel</Button>
+                              </form>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      }
+                      return (
+                        <TableRow key={client.id}>
+                          <TableCell className="font-medium">{client.name}</TableCell>
+                          <TableCell className="text-muted-foreground">{projectsPerClient[client.id] ?? 0}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm">{new Date(client.createdAt).toLocaleDateString("en-GB")}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => { setEditingClientId(client.id); setEditClientName(client.name); }}>
+                                <Edit2 className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => { if (confirm(`Delete client "${client.name}"? This will not delete associated projects.`)) deleteClientMutation.mutate(client.id); }}
+                                disabled={deleteClientMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </SectionCard>
+          </TabsContent>
+
+          <TabsContent value="projects" className="space-y-6">
+            <SectionCard
+              title="All Projects"
+              description="View and manage all generated projects across all clients."
+              action={
+                clientsData.length > 0 ? (
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm font-medium"
+                    value={projectClientFilter}
+                    onChange={(e) => setProjectClientFilter(e.target.value)}
+                  >
+                    <option value="__all__">All clients</option>
+                    {clientsData.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                ) : undefined
+              }
+            >
+              {adminProjectsLoading ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
+              ) : filteredAdminProjects.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground text-sm">No projects found.</div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-muted">
+                    <TableRow>
+                      <TableHead className="w-8"></TableHead>
+                      <TableHead className="font-bold text-foreground">Sheet Ref</TableHead>
+                      <TableHead className="font-bold text-foreground">Project Name</TableHead>
+                      <TableHead className="font-bold text-foreground">Client</TableHead>
+                      <TableHead className="font-bold text-foreground">Type</TableHead>
+                      <TableHead className="font-bold text-foreground">Last Generated</TableHead>
+                      <TableHead className="text-right font-bold text-foreground">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAdminProjects.map((project) => {
+                      const isExpanded = expandedAdminProject === project.id;
+                      return (
+                        <>
+                          <TableRow key={project.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setExpandedAdminProject(isExpanded ? null : project.id)}>
+                            <TableCell>{isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</TableCell>
+                            <TableCell className="font-mono text-sm">{project.sheetRef}</TableCell>
+                            <TableCell className="font-medium">{project.projectName}</TableCell>
+                            <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
+                            <TableCell className="text-muted-foreground">{project.projectType}</TableCell>
+                            <TableCell className="text-muted-foreground text-sm">
+                              {project.lastGeneratedAt ? new Date(project.lastGeneratedAt).toLocaleDateString("en-GB") : "—"}
+                            </TableCell>
+                            <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => { if (confirm(`Delete project "${project.projectName}" and all its stored documents?`)) deleteProjectMutation.mutate(project.id); }}
+                                disabled={deleteProjectMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                          {isExpanded && (
+                            <TableRow key={`${project.id}-docs`}>
+                              <TableCell colSpan={7} className="p-0 bg-muted/30">
+                                <div className="p-4">
+                                  <p className="text-sm font-semibold mb-2">Stored Documents</p>
+                                  {adminExpandedDocs.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No documents stored for this project.</p>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                      {adminExpandedDocs.map((doc) => (
+                                        <Button
+                                          key={doc.id}
+                                          size="sm"
+                                          variant={doc.isLatest ? "default" : "outline"}
+                                          className="h-7 text-xs font-semibold"
+                                          onClick={() => downloadAdminDoc(doc)}
+                                        >
+                                          <Download className="h-3 w-3 mr-1" />
+                                          {doc.name} v{doc.version}
+                                        </Button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </SectionCard>
           </TabsContent>
 
@@ -1314,6 +1691,66 @@ export default function AdminPage() {
                     className="hidden"
                     onChange={handleTrainingDocFileChange}
                   />
+                </div>
+
+                {/* Smartsheet */}
+                <div className="space-y-4 border-t border-border pt-6">
+                  <div>
+                    <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
+                      <FileText className="h-4 w-4 text-primary" />
+                      Smartsheet Integration
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      AI-generated project timelines are written directly to Smartsheet. The API key is stored in AWS Parameter Store (<code>/pm-governance/smartsheet-api-key</code>).
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/40 p-4 flex items-center gap-3">
+                    {smartsheetStatus?.connected ? (
+                      <>
+                        <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Connected</p>
+                          {smartsheetStatus.email && <p className="text-xs text-muted-foreground">Service account: {smartsheetStatus.email}</p>}
+                        </div>
+                      </>
+                    ) : smartsheetStatus?.reason === "not_configured" ? (
+                      <>
+                        <X className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Not configured</p>
+                          <p className="text-xs text-muted-foreground">Add <code>/pm-governance/smartsheet-api-key</code> to AWS Parameter Store to enable.</p>
+                        </div>
+                      </>
+                    ) : smartsheetStatus ? (
+                      <>
+                        <X className="h-4 w-4 text-destructive shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Connection failed</p>
+                          <p className="text-xs text-muted-foreground">{smartsheetStatus.error}</p>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Checking connection…</p>
+                    )}
+                    <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-xs" onClick={() => refetchSmartsheetStatus()}>
+                      Refresh
+                    </Button>
+                  </div>
+                  {smartsheetStatus?.connected && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="smartsheet-workspace">Workspace ID</Label>
+                      <Input
+                        id="smartsheet-workspace"
+                        value={smartsheetWorkspaceId}
+                        onChange={(e) => setSmartsheetWorkspaceId(e.target.value)}
+                        placeholder="Paste your Smartsheet workspace ID"
+                        disabled={!isAdmin}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Timeline sheets will be created in this workspace. Find the ID in the workspace URL: <code>smartsheet.com/workspaces/<strong>1234567890</strong></code>
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </SectionCard>
