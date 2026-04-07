@@ -391,6 +391,10 @@ export default function GovernanceStarterPage() {
             docsReceived++;
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document]);
+            if (totalExpected > 0 && docsReceived >= totalExpected) {
+              setIsGenerating(false);
+              setGeneratingStage("");
+            }
           } else if (event.type === "done") {
             setIsGenerating(false);
             setGeneratingStage("");
