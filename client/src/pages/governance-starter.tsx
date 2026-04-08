@@ -43,6 +43,7 @@ const stakeholderSchema = z.object({
 const billingMilestoneSchema = z.object({
   stage: z.string().min(1, "Please enter a stage"),
   percentage: z.coerce.number().min(0, "Min 0").max(100, "Max 100"),
+  value: z.coerce.number().min(0).optional(),
   date: z.string().min(1, "Please select an estimated date"),
 });
 
@@ -103,7 +104,7 @@ function SectionCard({ id, title, badge, children }: { id: string; title: string
 }
 
 type Client = { id: string; name: string };
-type Project = { id: string; clientId: string; clientName: string; projectName: string; sheetRef: string; projectType: string; projectSize: string; value: string; startDate: string; endDate: string; summary: string; sponsorName: string; sponsorRole: string; billingMilestones: { stage: string; percentage: number; date: string }[]; flipsideStakeholders: { name: string; role: string }[]; clientStakeholders: { name: string; role: string }[]; };
+type Project = { id: string; clientId: string; clientName: string; projectName: string; sheetRef: string; projectType: string; projectSize: string; value: string; startDate: string; endDate: string; summary: string; sponsorName: string; sponsorRole: string; billingMilestones: { stage: string; percentage: number; value?: number; date: string }[]; flipsideStakeholders: { name: string; role: string }[]; clientStakeholders: { name: string; role: string }[]; };
 
 export default function GovernanceStarterPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -130,6 +131,7 @@ export default function GovernanceStarterPage() {
   const [versionModal, setVersionModal] = useState<{ open: boolean; onConfirm: (mode: "replace" | "new") => void } | null>(null);
   const [generateTimeline, setGenerateTimeline] = useState(false);
   const [timelineSheetUrl, setTimelineSheetUrl] = useState<string | null>(null);
+  const [projectSelectValue, setProjectSelectValue] = useState<string>("");
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
@@ -244,8 +246,8 @@ export default function GovernanceStarterPage() {
       startDate: "",
       endDate: "",
       billingMilestones: [
-        { stage: "Deposit / Kickoff", percentage: 50, date: "" },
-        { stage: "Completion", percentage: 50, date: "" }
+        { stage: "Deposit / Kickoff", percentage: 50, value: 0, date: "" },
+        { stage: "Completion", percentage: 50, value: 0, date: "" }
       ],
       summary: "",
       flipsideStakeholders: [
@@ -278,6 +280,8 @@ export default function GovernanceStarterPage() {
   // Auto-populate docsRequired from the package when project type changes
   // Only ticks AI-generate docs — passthrough docs are included automatically at generate time
   const watchedProjectType = form.watch("projectType");
+  const watchedProjectValue = parseFloat(form.watch("value") || "0");
+  const watchedBillingMilestones = form.watch("billingMilestones");
   useEffect(() => {
     if (!watchedProjectType || !availablePackages || !availableTemplates) return;
     const pkg = availablePackages.find((p) => p.type === watchedProjectType);
@@ -606,6 +610,7 @@ export default function GovernanceStarterPage() {
                         if (val === "__new__") { setShowNewClientInput(true); return; }
                         setSelectedClientId(val);
                         setSelectedProjectId("");
+                        setProjectSelectValue("");
                         const c = clients.find((x) => x.id === val);
                         if (c) form.setValue("client", c.name, { shouldValidate: false });
                       }}
@@ -624,8 +629,9 @@ export default function GovernanceStarterPage() {
                 <div className="col-span-12 md:col-span-3">
                   <label className="text-sm font-semibold block mb-1.5">Project</label>
                   <Select
-                    value={selectedProjectId}
+                    value={projectSelectValue}
                     onValueChange={(val) => {
+                      setProjectSelectValue(val);
                       if (val === "__new__") { setSelectedProjectId(""); return; }
                       setSelectedProjectId(val);
                       const p = projects.find((x) => x.id === val);
@@ -681,7 +687,7 @@ export default function GovernanceStarterPage() {
                       <FormLabel className="flex justify-between font-semibold">
                         <span>Project Type <span className="text-destructive font-extrabold ml-1">*</span></span>
                       </FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select type" />
@@ -708,7 +714,7 @@ export default function GovernanceStarterPage() {
                       <FormLabel className="flex justify-between font-semibold">
                         <span>Project Size <span className="text-destructive font-extrabold ml-1">*</span></span>
                       </FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Select size" />
@@ -787,7 +793,7 @@ export default function GovernanceStarterPage() {
 
                   <div className="flex flex-col gap-2.5">
                     {billingArray.fields.map((field, index) => (
-                      <div key={field.id} className="grid grid-cols-1 gap-2.5 md:grid-cols-[1fr_100px_1fr_auto] md:items-end">
+                      <div key={field.id} className="grid grid-cols-1 gap-2.5 md:grid-cols-[1fr_90px_110px_1fr_auto] md:items-end">
                         <FormField
                           control={form.control}
                           name={`billingMilestones.${index}.stage`}
@@ -810,10 +816,52 @@ export default function GovernanceStarterPage() {
                           render={({ field }) => (
                             <FormItem className="space-y-1.5">
                               <FormLabel className="text-xs font-semibold text-muted-foreground">
-                                Percentage (%)
+                                % Split
                               </FormLabel>
                               <FormControl>
-                                <Input type="number" min="0" max="100" {...field} />
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  {...field}
+                                  onChange={(e) => {
+                                    field.onChange(e);
+                                    const pct = parseFloat(e.target.value || "0");
+                                    if (isFinite(watchedProjectValue) && watchedProjectValue > 0) {
+                                      form.setValue(`billingMilestones.${index}.value`, Math.round((pct / 100) * watchedProjectValue * 100) / 100, { shouldValidate: false });
+                                    }
+                                  }}
+                                />
+                              </FormControl>
+                              <FormMessage className="text-xs" />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name={`billingMilestones.${index}.value`}
+                          render={({ field }) => (
+                            <FormItem className="space-y-1.5">
+                              <FormLabel className="text-xs font-semibold text-muted-foreground">
+                                Value (£)
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  {...field}
+                                  value={field.value ?? ""}
+                                  onChange={(e) => {
+                                    field.onChange(e);
+                                    const val = parseFloat(e.target.value || "0");
+                                    if (isFinite(watchedProjectValue) && watchedProjectValue > 0) {
+                                      form.setValue(`billingMilestones.${index}.percentage`, Math.round((val / watchedProjectValue) * 10000) / 100, { shouldValidate: false });
+                                    }
+                                  }}
+                                />
                               </FormControl>
                               <FormMessage className="text-xs" />
                             </FormItem>
@@ -852,8 +900,8 @@ export default function GovernanceStarterPage() {
                             }}
                             className={cn(
                               "h-10 w-full md:w-auto font-bold",
-                              billingArray.fields.length === 1 
-                                ? "opacity-50 cursor-not-allowed" 
+                              billingArray.fields.length === 1
+                                ? "opacity-50 cursor-not-allowed"
                                 : "text-destructive hover:bg-destructive/10 hover:text-destructive hover:border-destructive/50"
                             )}
                           >
@@ -864,6 +912,24 @@ export default function GovernanceStarterPage() {
                       </div>
                     ))}
                   </div>
+
+                  {(() => {
+                    const totalPct = (watchedBillingMilestones ?? []).reduce((acc, m) => acc + (Number(m.percentage) || 0), 0);
+                    const totalVal = (watchedBillingMilestones ?? []).reduce((acc, m) => acc + (Number(m.value) || 0), 0);
+                    const isOver = totalPct > 100.01;
+                    const isUnder = totalPct < 99.99 && totalPct > 0;
+                    const isOk = Math.abs(totalPct - 100) <= 0.01;
+                    return (
+                      <div className={cn(
+                        "mt-3 flex items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold",
+                        isOk ? "bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
+                          : "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                      )}>
+                        <span>Total: {Math.round(totalPct * 100) / 100}% {isOk ? "✓" : isOver ? "— over 100%" : isUnder ? "— must reach 100%" : ""}</span>
+                        {watchedProjectValue > 0 && <span>£{totalVal.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} of £{watchedProjectValue.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                      </div>
+                    );
+                  })()}
 
                   {form.formState.errors.billingMilestones?.root && (
                     <div className="mt-3 rounded-xl border border-destructive/25 bg-destructive/10 p-2.5 text-xs font-semibold text-destructive">
@@ -877,7 +943,7 @@ export default function GovernanceStarterPage() {
                       variant="outline"
                       size="sm"
                       className="font-bold text-xs"
-                      onClick={() => billingArray.append({ stage: "", percentage: 0, date: "" })}
+                      onClick={() => billingArray.append({ stage: "", percentage: 0, value: 0, date: "" })}
                     >
                       + Add milestone
                     </Button>
@@ -1055,7 +1121,7 @@ export default function GovernanceStarterPage() {
                         render={({ field }) => (
                           <FormItem className="space-y-1.5">
                             <FormLabel className="text-xs font-semibold text-muted-foreground">
-                              Sponsor?
+                              Sponsor/Client Lead?
                             </FormLabel>
                             <FormControl>
                               <div className="flex h-10 items-center gap-2 rounded-xl border border-input bg-background px-3">
@@ -1066,7 +1132,7 @@ export default function GovernanceStarterPage() {
                                 >
                                   <div className="flex items-center space-x-2">
                                     <RadioGroupItem value={index.toString()} id={`sponsor-${index}`} />
-                                    <Label htmlFor={`sponsor-${index}`} className="text-xs font-normal">Sponsor</Label>
+                                    <Label htmlFor={`sponsor-${index}`} className="text-xs font-normal">Sponsor/Client Lead</Label>
                                   </div>
                                 </RadioGroup>
                               </div>
@@ -1210,7 +1276,7 @@ export default function GovernanceStarterPage() {
                       </FormLabel>
                       {watchedProjectType && (
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          Select which documents the AI should generate. Documents marked as pass-through are automatically added to the zip.
+                          Select the documents for the AI to generate for this project.
                         </p>
                       )}
                       <div className="mt-1.5 grid gap-2.5 md:grid-cols-2">
@@ -1249,13 +1315,13 @@ export default function GovernanceStarterPage() {
                         });
                         return passthroughDocs.length > 0 ? (
                           <div className="mt-2.5 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 px-3 py-2.5 text-xs text-blue-700 dark:text-blue-300">
-                            <span className="font-semibold">Also included in zip (pass-through):</span>{" "}
-                            {passthroughDocs.join(", ")}
+                            <p className="font-semibold mb-0.5">Also included: pass-through documents</p>
+                            <p>These are standard files automatically included in the zip without AI generation: {passthroughDocs.join(", ")}</p>
                           </div>
                         ) : null;
                       })()}
                       <FormDescription className="text-xs mt-1.5">
-                        Select the documents for the AI to generate. Pass-through templates from the package are added to the zip automatically.
+                        Pass-through documents are standard files included automatically in the zip without requiring AI generation.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -1266,20 +1332,23 @@ export default function GovernanceStarterPage() {
               <div className="mt-3.5 text-xs text-muted-foreground">
                 Use <strong>Generate documents</strong> to submit the form and trigger document generation downstream.
               </div>
-
-              {smartsheetEnabled?.enabled && (
-                <div className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-background p-2.5 px-3">
-                  <Checkbox
-                    id="generate-timeline"
-                    checked={generateTimeline}
-                    onCheckedChange={(v) => setGenerateTimeline(!!v)}
-                  />
-                  <label htmlFor="generate-timeline" className="text-sm cursor-pointer select-none">
-                    Generate Smartsheet timeline
-                  </label>
-                </div>
-              )}
             </SectionCard>
+
+            {smartsheetEnabled?.enabled && (
+              <div className="flex items-center gap-3 rounded-[14px] border border-border bg-card p-3 px-4 shadow-[0_6px_18px_rgba(17,24,39,0.08)]">
+                <Checkbox
+                  id="generate-timeline"
+                  checked={generateTimeline}
+                  onCheckedChange={(v) => setGenerateTimeline(!!v)}
+                />
+                <div>
+                  <label htmlFor="generate-timeline" className="text-sm font-semibold cursor-pointer select-none">
+                    Smartsheet Timeline
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-0.5">Generate an AI-powered project timeline in Smartsheet after document generation.</p>
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-border bg-muted p-4 rounded-[14px] dark:bg-muted/80 mt-2">
               <div className="text-xs text-muted-foreground">
