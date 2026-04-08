@@ -221,9 +221,9 @@ export default function MyProjectsPage() {
                 {docs.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
                 ) : (
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto overflow-y-auto max-h-72">
                     <table className="text-sm w-full">
-                      <thead>
+                      <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm">
                         <tr className="border-b border-border">
                           <th className="text-left py-2 pr-4 font-semibold">Document</th>
                           {versions.map((v) => (
