@@ -132,10 +132,35 @@ export default function GovernanceStarterPage() {
   const [generateTimeline, setGenerateTimeline] = useState(false);
   const [timelineSheetUrl, setTimelineSheetUrl] = useState<string | null>(null);
   const [projectSelectValue, setProjectSelectValue] = useState<string>("");
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
   }, [isAuthenticated, isLoading, navigate]);
+
+  // Load draft from URL ?draftId=xxx
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const params = new URLSearchParams(window.location.search);
+    const draftId = params.get("draftId");
+    if (!draftId) return;
+    fetch(`/api/drafts/${draftId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((draft) => {
+        if (!draft) return;
+        const fd = draft.formData as Record<string, unknown>;
+        if (fd.selectedClientId) setSelectedClientId(fd.selectedClientId as string);
+        if (fd.selectedProjectId) setSelectedProjectId(fd.selectedProjectId as string);
+        if (fd.projectSelectValue) setProjectSelectValue(fd.projectSelectValue as string);
+        if (fd.generateTimeline !== undefined) setGenerateTimeline(!!fd.generateTimeline);
+        if (fd.fields) form.reset(fd.fields as Parameters<typeof form.reset>[0]);
+        setCurrentDraftId(draft.id);
+        toast.info("Draft loaded — continue where you left off.");
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   const { data: smartsheetEnabled } = useQuery<{ enabled: boolean }>({
     queryKey: ["/api/smartsheet/enabled"],
@@ -402,6 +427,11 @@ export default function GovernanceStarterPage() {
             setGeneratingStage("");
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
+            // Clean up draft on successful generation
+            if (currentDraftId) {
+              fetch(`/api/drafts/${currentDraftId}`, { method: "DELETE" }).catch(() => {});
+              setCurrentDraftId(null);
+            }
           } else if (event.type === "error") {
             throw new Error((event.error as string) ?? "Generation failed");
           }
@@ -526,7 +556,55 @@ export default function GovernanceStarterPage() {
   const handleReset = () => {
     form.reset();
     setUploads([]);
+    setCurrentDraftId(null);
+    setProjectSelectValue("");
+    setSelectedClientId("");
+    setSelectedProjectId("");
     toast("Reset", { description: "Cleared form data." });
+  };
+
+  const saveDraft = async () => {
+    const values = form.getValues();
+    const clientName = values.client?.trim();
+    const projectName = values.projectName?.trim();
+    if (!clientName || !projectName) {
+      toast.error("Please enter at least a Client and Project Name before saving a draft.");
+      return;
+    }
+    setIsSavingDraft(true);
+    try {
+      const formData = {
+        selectedClientId,
+        selectedProjectId,
+        projectSelectValue,
+        generateTimeline,
+        fields: values,
+      };
+      let draft: { id: string };
+      if (currentDraftId) {
+        const res = await fetch(`/api/drafts/${currentDraftId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientName, projectName, formData }),
+        });
+        if (!res.ok) throw new Error("Failed to update draft");
+        draft = await res.json();
+      } else {
+        const res = await fetch("/api/drafts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientName, projectName, formData }),
+        });
+        if (!res.ok) throw new Error("Failed to create draft");
+        draft = await res.json();
+        setCurrentDraftId(draft.id);
+      }
+      toast.success("Draft saved", { description: `${clientName} — ${projectName}` });
+    } catch {
+      toast.error("Failed to save draft");
+    } finally {
+      setIsSavingDraft(false);
+    }
   };
 
   return (
@@ -1352,11 +1430,19 @@ export default function GovernanceStarterPage() {
 
             <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-border bg-muted p-4 rounded-[14px] dark:bg-muted/80 mt-2">
               <div className="text-xs text-muted-foreground">
-                Required fields validated on submit.
+                {currentDraftId ? (
+                  <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-medium">
+                    <span className="h-2 w-2 rounded-full bg-amber-500 inline-block" />
+                    Draft saved
+                  </span>
+                ) : "Required fields validated on submit."}
               </div>
               <div className="flex flex-wrap gap-2.5 justify-end">
                 <Button type="button" variant="outline" onClick={handleReset} className="font-bold" disabled={isGenerating}>
                   Reset
+                </Button>
+                <Button type="button" variant="outline" onClick={saveDraft} className="font-bold" disabled={isGenerating || isSavingDraft}>
+                  {isSavingDraft ? "Saving…" : currentDraftId ? "Update Draft" : "Save Draft"}
                 </Button>
                 {isGenerating && (
                   <Button type="button" variant="destructive" onClick={() => generateAbortRef.current?.abort()} className="font-bold">

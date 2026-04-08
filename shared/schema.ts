@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, json } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, json, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -115,11 +115,23 @@ export const storedDocumentsTable = pgTable("stored_documents", {
   isLatest: boolean("is_latest").notNull().default(false),
 });
 
+// ---- Drafts ----
+export const draftsTable = pgTable("drafts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: text("user_id").notNull(),
+  clientName: text("client_name").notNull(),
+  projectName: text("project_name").notNull(),
+  formData: json("form_data").$type<Record<string, unknown>>().notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // Derived types
 export type AiSettings = typeof aiSettingsTable.$inferSelect;
 export type Client = typeof clientsTable.$inferSelect;
 export type Project = typeof projectsTable.$inferSelect;
 export type StoredDocument = typeof storedDocumentsTable.$inferSelect;
+export type Draft = typeof draftsTable.$inferSelect;
 
 // ---- Generate request schema ----
 const stakeholderSchema = z.object({

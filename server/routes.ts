@@ -610,6 +610,47 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // --- Drafts ---
+
+  app.get("/api/drafts/mine", requireAuth, async (req, res) => {
+    res.json(await storage.listDrafts(req.session.userId!));
+  });
+
+  app.post("/api/drafts", requireAuth, async (req, res) => {
+    const { clientName, projectName, formData } = req.body;
+    if (!clientName?.trim() || !projectName?.trim()) {
+      return res.status(400).json({ message: "clientName and projectName are required" });
+    }
+    const draft = await storage.createDraft({
+      userId: req.session.userId!,
+      clientName: clientName.trim(),
+      projectName: projectName.trim(),
+      formData: formData ?? {},
+    });
+    res.status(201).json(draft);
+  });
+
+  app.patch("/api/drafts/:id", requireAuth, async (req, res) => {
+    const draft = await storage.getDraft(req.params.id);
+    if (!draft) return res.status(404).json({ message: "Not found" });
+    if (draft.userId !== req.session.userId) return res.status(403).json({ message: "Forbidden" });
+    const { clientName, projectName, formData } = req.body;
+    const updated = await storage.updateDraft(req.params.id, {
+      ...(clientName !== undefined && { clientName }),
+      ...(projectName !== undefined && { projectName }),
+      ...(formData !== undefined && { formData }),
+    });
+    res.json(updated);
+  });
+
+  app.delete("/api/drafts/:id", requireAuth, async (req, res) => {
+    const draft = await storage.getDraft(req.params.id);
+    if (!draft) return res.status(404).json({ message: "Not found" });
+    if (draft.userId !== req.session.userId) return res.status(403).json({ message: "Forbidden" });
+    await storage.deleteDraft(req.params.id);
+    res.json({ ok: true });
+  });
+
   // --- Smartsheet ---
 
   app.get("/api/smartsheet/enabled", requireAuth, async (_req, res) => {
