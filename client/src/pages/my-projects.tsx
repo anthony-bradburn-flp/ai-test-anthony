@@ -221,11 +221,11 @@ export default function MyProjectsPage() {
                 {docs.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
                 ) : (
-                  <div className="overflow-x-auto overflow-y-auto max-h-72">
+                  <div className="overflow-x-auto">
                     <table className="text-sm w-full">
-                      <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm">
+                      <thead>
                         <tr className="border-b border-border">
-                          <th className="text-left py-2 pr-4 font-semibold">Document</th>
+                          <th className="text-left py-2 pr-4 font-semibold sticky left-0 bg-card z-10">Document</th>
                           {versions.map((v) => (
                             <th key={v} className="text-center py-2 px-2 font-semibold">v{v}</th>
                           ))}
@@ -234,7 +234,7 @@ export default function MyProjectsPage() {
                       <tbody>
                         {Object.entries(docsByName).map(([name, docVersions]) => (
                           <tr key={name} className="border-b border-border/50 last:border-0">
-                            <td className="py-2 pr-4 font-medium">{name}</td>
+                            <td className="py-2 pr-4 font-medium sticky left-0 bg-card z-10">{name}</td>
                             {versions.map((v) => {
                               const doc = docVersions.find((d) => d.version === v);
                               return (
