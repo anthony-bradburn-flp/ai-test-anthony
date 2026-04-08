@@ -1,6 +1,6 @@
 import { eq, and, desc, asc, max } from "drizzle-orm";
-import { type User, type InsertUser, type Client, type Project, type StoredDocument } from "@shared/schema";
-import { users, templatesTable, packagesTable, aiSettingsTable, clientsTable, projectsTable, storedDocumentsTable } from "@shared/schema";
+import { type User, type InsertUser, type Client, type Project, type StoredDocument, type Draft } from "@shared/schema";
+import { users, templatesTable, packagesTable, aiSettingsTable, clientsTable, projectsTable, storedDocumentsTable, draftsTable } from "@shared/schema";
 import { db } from "./db";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
@@ -157,6 +157,12 @@ export interface IStorage {
   deleteDocument(id: string): Promise<StoredDocument | undefined>;
   deleteDocumentsByProject(projectId: string): Promise<void>;
   markDocumentsNotLatest(projectId: string): Promise<void>;
+  // Drafts
+  listDrafts(userId: string): Promise<Draft[]>;
+  getDraft(id: string): Promise<Draft | undefined>;
+  createDraft(data: { userId: string; clientName: string; projectName: string; formData: Record<string, unknown> }): Promise<Draft>;
+  updateDraft(id: string, data: { clientName?: string; projectName?: string; formData?: Record<string, unknown> }): Promise<Draft | undefined>;
+  deleteDraft(id: string): Promise<void>;
 }
 
 class DbStorage implements IStorage {
@@ -452,6 +458,36 @@ class DbStorage implements IStorage {
     await db.update(storedDocumentsTable)
       .set({ isLatest: false })
       .where(eq(storedDocumentsTable.projectId, projectId));
+  }
+
+  // ---- Drafts ----
+  async listDrafts(userId: string): Promise<Draft[]> {
+    return db.select().from(draftsTable)
+      .where(eq(draftsTable.userId, userId))
+      .orderBy(desc(draftsTable.updatedAt));
+  }
+
+  async getDraft(id: string): Promise<Draft | undefined> {
+    const rows = await db.select().from(draftsTable).where(eq(draftsTable.id, id));
+    return rows[0];
+  }
+
+  async createDraft(data: { userId: string; clientName: string; projectName: string; formData: Record<string, unknown> }): Promise<Draft> {
+    const row = { ...data, id: randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    await db.insert(draftsTable).values(row);
+    return row;
+  }
+
+  async updateDraft(id: string, data: { clientName?: string; projectName?: string; formData?: Record<string, unknown> }): Promise<Draft | undefined> {
+    const rows = await db.update(draftsTable)
+      .set({ ...data, updatedAt: new Date().toISOString() })
+      .where(eq(draftsTable.id, id))
+      .returning();
+    return rows[0];
+  }
+
+  async deleteDraft(id: string): Promise<void> {
+    await db.delete(draftsTable).where(eq(draftsTable.id, id));
   }
 }
 
