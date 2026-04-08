@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PaginationBar, PAGE_SIZE, paginateItems } from "@/components/ui/pagination-bar";
 
 type ApiUser = {
   id: string;
@@ -164,6 +165,13 @@ export default function AdminPage() {
   const [editEmail, setEditEmail] = useState("");
   const [editRole, setEditRole] = useState<"admin" | "manager" | "user">("user");
   const [editPassword, setEditPassword] = useState("");
+
+  // Pagination state
+  const [pkgPage, setPkgPage] = useState(1);
+  const [tplPage, setTplPage] = useState(1);
+  const [usrPage, setUsrPage] = useState(1);
+  const [cliPage, setCliPage] = useState(1);
+  const [projPage, setProjPage] = useState(1);
 
   // AI Settings state
   const queryClient = useQueryClient();
@@ -867,7 +875,7 @@ export default function AdminPage() {
                 <TableBody>
                   {packagesLoading ? (
                     <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell></TableRow>
-                  ) : packagesData?.map((pkg) => {
+                  ) : paginateItems(packagesData ?? [], pkgPage).map((pkg) => {
                     if (editingPackageId === pkg.id) {
                       return (
                         <TableRow key={pkg.id} className="bg-muted/20">
@@ -963,6 +971,7 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
+              <PaginationBar page={pkgPage} total={(packagesData ?? []).length} onPage={setPkgPage} />
             </SectionCard>
           </TabsContent>
 
@@ -1033,7 +1042,7 @@ export default function AdminPage() {
                 <TableBody>
                   {templatesLoading ? (
                     <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell></TableRow>
-                  ) : templatesData?.map((tpl) => {
+                  ) : paginateItems(templatesData ?? [], tplPage).map((tpl) => {
                     if (editingTemplateId === tpl.id) {
                       return (
                         <TableRow key={tpl.id} className="bg-muted/20">
@@ -1142,6 +1151,7 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
+              <PaginationBar page={tplPage} total={(templatesData ?? []).length} onPage={setTplPage} />
               <input
                 ref={tplFileInputRef}
                 type="file"
@@ -1246,7 +1256,7 @@ export default function AdminPage() {
                     <TableRow>
                       <TableCell colSpan={4} className="text-center text-muted-foreground py-6">Loading…</TableCell>
                     </TableRow>
-                  ) : usersData?.map((u) => {
+                  ) : paginateItems(usersData ?? [], usrPage).map((u) => {
                     // Managers can only see edit/delete on manager users
                     const canEdit = isAdmin || u.role !== "admin";
                     const isSelf = u.username === currentUser?.username;
@@ -1356,6 +1366,7 @@ export default function AdminPage() {
                   })}
                 </TableBody>
               </Table>
+              <PaginationBar page={usrPage} total={(usersData ?? []).length} onPage={setUsrPage} />
             </SectionCard>
           </TabsContent>
 
@@ -1404,7 +1415,7 @@ export default function AdminPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {clientsData.map((client) => {
+                    {paginateItems(clientsData, cliPage).map((client) => {
                       if (editingClientId === client.id) {
                         return (
                           <TableRow key={client.id}>
@@ -1448,6 +1459,7 @@ export default function AdminPage() {
                   </TableBody>
                 </Table>
               )}
+              <PaginationBar page={cliPage} total={clientsData.length} onPage={setCliPage} />
             </SectionCard>
           </TabsContent>
 
@@ -1460,7 +1472,7 @@ export default function AdminPage() {
                   <select
                     className="h-9 rounded-md border border-input bg-background px-3 text-sm font-medium"
                     value={projectClientFilter}
-                    onChange={(e) => setProjectClientFilter(e.target.value)}
+                    onChange={(e) => { setProjectClientFilter(e.target.value); setProjPage(1); }}
                   >
                     <option value="__all__">All clients</option>
                     {clientsData.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -1487,7 +1499,7 @@ export default function AdminPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredAdminProjects.map((project) => {
+                    {paginateItems(filteredAdminProjects, projPage).map((project) => {
                       const isExpanded = expandedAdminProject === project.id;
                       return (
                         <>
@@ -1553,6 +1565,7 @@ export default function AdminPage() {
                   </TableBody>
                 </Table>
               )}
+              <PaginationBar page={projPage} total={filteredAdminProjects.length} onPage={setProjPage} />
             </SectionCard>
           </TabsContent>
 
