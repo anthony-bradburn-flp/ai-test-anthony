@@ -620,7 +620,16 @@ export default function GovernanceStarterPage() {
               Capture project information, stakeholders, and documentation needs.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              className="font-bold"
+              onClick={saveDraft}
+              disabled={isGenerating || isSavingDraft}
+            >
+              {isSavingDraft ? "Saving…" : currentDraftId ? "Update Draft" : "Save Draft"}
+            </Button>
             <Link href="/my-projects">
               <Button variant="outline" className="font-bold">My Projects</Button>
             </Link>
