@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
-import { Trash2, FileText } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useFieldArray } from "react-hook-form";
@@ -360,9 +360,8 @@ export default function GovernanceStarterPage() {
       let buffer = "";
       let totalExpected = 0;
       let docsReceived = 0;
-      let streamFinished = false;
 
-      while (!streamFinished) {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -394,30 +393,11 @@ export default function GovernanceStarterPage() {
             docsReceived++;
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
-            if (totalExpected > 0 && docsReceived >= totalExpected) {
-              setIsGenerating(false);
-              setGeneratingStage("");
-              streamFinished = true;
-              reader.cancel().catch(() => {});
-              break;
-            }
           } else if (event.type === "done") {
             setIsGenerating(false);
             setGeneratingStage("");
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
-            toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`, {
-              description: event.trainingDocAttached
-                ? "Training document standards applied."
-                : "No training document — configure one in Admin > AI Settings.",
-            });
-            streamFinished = true;
-            reader.cancel().catch(() => {});
-            break;
-          } else if (event.type === "timeline") {
-            setTimelineSheetUrl(event.sheetUrl as string);
-            toast.success("Smartsheet timeline created", { description: "Your project timeline has been written to Smartsheet." });
-          } else if (event.type === "timeline_error") {
-            toast.warning("Timeline generation failed", { description: event.error as string });
+            toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
           } else if (event.type === "error") {
             throw new Error((event.error as string) ?? "Generation failed");
           }
@@ -1386,55 +1366,43 @@ export default function GovernanceStarterPage() {
           );
         })()}
 
-        {generatedDocs !== null && (
-          <div className="mt-8 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-foreground">
-                Generated Documents
-                {isGenerating && generatedDocs.length > 0 && (
-                  <span className="ml-2 text-sm font-normal text-muted-foreground">({generatedDocs.length} ready)</span>
-                )}
-              </h2>
-              {!isGenerating && generatedDocs.length > 1 && (
-                <Button onClick={handleDownload} disabled={isDownloading} className="font-bold">
+        {!isGenerating && generatedDocs !== null && generatedDocs.length > 0 && (
+          <div className="mt-8 rounded-[14px] border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <svg className="h-5 w-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+              <div>
+                <p className="font-semibold text-green-800 dark:text-green-200">
+                  {generatedDocs.length} document{generatedDocs.length !== 1 ? "s" : ""} generated
+                </p>
+                <p className="text-sm text-green-700 dark:text-green-300 mt-0.5">
+                  Your documents are ready to download from My Projects.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {selectedProjectId && (
+                <Link href="/my-projects">
+                  <Button className="font-bold bg-green-700 hover:bg-green-800 text-white">
+                    Go to My Projects →
+                  </Button>
+                </Link>
+              )}
+              {generatedDocs.length > 1 && (
+                <Button variant="outline" onClick={handleDownload} disabled={isDownloading} className="font-bold">
                   {isDownloading ? "Preparing…" : "Download All (.zip)"}
                 </Button>
               )}
+              {generatedDocs.length === 1 && (
+                <Button variant="outline" onClick={() => downloadSingleDoc(generatedDocs[0])} className="font-bold">
+                  Download {generatedDocs[0].name}
+                </Button>
+              )}
             </div>
-            {timelineSheetUrl && !isGenerating && (
-              <a
-                href={timelineSheetUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 rounded-xl border border-green-300 bg-green-50 dark:bg-green-950/30 dark:border-green-800 px-3 py-2.5 text-sm text-green-700 dark:text-green-300 font-medium hover:bg-green-100 transition-colors"
-              >
-                <FileText className="h-4 w-4 shrink-0" />
-                View Smartsheet Timeline →
-              </a>
-            )}
-            {generatedDocs.length === 0 && (
-              <div className="rounded-[14px] border border-dashed border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                Documents will appear here as they are ready…
-              </div>
-            )}
-            {generatedDocs.map((doc, i) => (
-              <div key={i} className="rounded-[14px] border border-border bg-card overflow-hidden">
-                <div className="border-b border-border bg-muted px-4 py-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <span className="font-semibold text-sm text-foreground">{doc.name}</span>
-                    <span className="ml-2 text-xs text-muted-foreground">{doc.filename}</span>
-                  </div>
-                  <Button size="sm" variant="outline" className="shrink-0 font-semibold" onClick={() => downloadSingleDoc(doc)}>
-                    Download
-                  </Button>
-                </div>
-                <pre className="p-4 text-xs text-foreground whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-background">
-                  {doc.preview}
-                </pre>
-              </div>
-            ))}
           </div>
         )}
+
       </main>
 
       {/* Version modal */}
