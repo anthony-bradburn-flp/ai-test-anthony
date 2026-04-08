@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SiteLogo } from "@/components/page-header";
@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ChevronDown, ChevronRight, Download, FileText, ExternalLink, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { PaginationBar, PAGE_SIZE, paginateItems } from "@/components/ui/pagination-bar";
 
 type Project = {
   id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
@@ -35,6 +36,14 @@ export default function MyProjectsPage() {
   const [timelineError, setTimelineError] = useState<Record<string, string>>({});
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState<string | null>(null);
+
+  // Pagination state
+  const [draftsPage, setDraftsPage] = useState(1);
+  const [myPage, setMyPage] = useState(1);
+  const [teamPage, setTeamPage] = useState(1);
+
+  // Reset to page 1 when filters change
+  useEffect(() => { setMyPage(1); setTeamPage(1); }, [search, clientFilter]);
 
   const isAdmin = user?.role === "admin" || user?.role === "manager";
 
@@ -375,7 +384,7 @@ export default function MyProjectsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {drafts.map((draft) => (
+                  {paginateItems(drafts, draftsPage).map((draft) => (
                     <tr key={draft.id} className="border-b border-amber-100 dark:border-amber-900/40 last:border-0 hover:bg-amber-50/50 dark:hover:bg-amber-950/20">
                       <td className="py-2.5 px-4 font-medium">
                         <span className="inline-flex items-center gap-2">
@@ -405,6 +414,7 @@ export default function MyProjectsPage() {
                   ))}
                 </tbody>
               </table>
+              <PaginationBar page={draftsPage} total={drafts.length} onPage={setDraftsPage} />
             </div>
           </div>
         )}
@@ -426,8 +436,9 @@ export default function MyProjectsPage() {
                 <div className="rounded-xl border border-border overflow-hidden">
                   <Table>
                     {tableHeader}
-                    <TableBody>{renderProjectRows(myProjects)}</TableBody>
+                    <TableBody>{renderProjectRows(paginateItems(myProjects, myPage))}</TableBody>
                   </Table>
+                  <PaginationBar page={myPage} total={myProjects.length} onPage={setMyPage} />
                 </div>
               )}
             </div>
@@ -439,8 +450,9 @@ export default function MyProjectsPage() {
                 <div className="rounded-xl border border-border overflow-hidden">
                   <Table>
                     {tableHeader}
-                    <TableBody>{renderProjectRows(otherProjects)}</TableBody>
+                    <TableBody>{renderProjectRows(paginateItems(otherProjects, teamPage))}</TableBody>
                   </Table>
+                  <PaginationBar page={teamPage} total={otherProjects.length} onPage={setTeamPage} />
                 </div>
               </div>
             )}
@@ -449,8 +461,9 @@ export default function MyProjectsPage() {
           <div className="rounded-xl border border-border overflow-hidden">
             <Table>
               {tableHeader}
-              <TableBody>{renderProjectRows(myProjects)}</TableBody>
+              <TableBody>{renderProjectRows(paginateItems(myProjects, myPage))}</TableBody>
             </Table>
+            <PaginationBar page={myPage} total={myProjects.length} onPage={setMyPage} />
           </div>
         )}
       </main>
