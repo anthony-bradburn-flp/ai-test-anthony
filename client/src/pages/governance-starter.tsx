@@ -360,8 +360,9 @@ export default function GovernanceStarterPage() {
       let buffer = "";
       let totalExpected = 0;
       let docsReceived = 0;
+      let streamFinished = false;
 
-      outer: while (true) {
+      while (!streamFinished) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -370,32 +371,35 @@ export default function GovernanceStarterPage() {
 
         for (const line of lines) {
           if (!line.trim()) continue;
-          const event = JSON.parse(line);
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(line); } catch { continue; }
 
           if (event.type === "start") {
-            totalExpected = event.count;
+            totalExpected = event.count as number;
             setGeneratingStage(`Building ${totalExpected} document${totalExpected !== 1 ? "s" : ""}…`);
             setGeneratedDocs([]);
-            if (event.truncatedDocs?.length) {
-              for (const name of event.truncatedDocs) {
+            if (Array.isArray(event.truncatedDocs)) {
+              for (const name of event.truncatedDocs as string[]) {
                 toast.warning(`${name} exceeds 15,000 character limit — only the first 15,000 characters were passed to the AI.`);
               }
             }
-            if (event.missingTemplates?.length) {
+            if (Array.isArray(event.missingTemplates) && (event.missingTemplates as string[]).length) {
+              const mt = event.missingTemplates as string[];
               toast.warning(
-                `${event.missingTemplates.length} template file${event.missingTemplates.length !== 1 ? "s" : ""} not uploaded: ${event.missingTemplates.join(", ")}. These documents will be AI-generated without a template structure — upload files in Admin > Templates.`,
+                `${mt.length} template file${mt.length !== 1 ? "s" : ""} not uploaded: ${mt.join(", ")}. These documents will be AI-generated without a template structure — upload files in Admin > Templates.`,
                 { duration: 8000 }
               );
             }
           } else if (event.type === "document") {
             docsReceived++;
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
-            setGeneratedDocs((prev) => [...(prev ?? []), event.document]);
+            setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
             if (totalExpected > 0 && docsReceived >= totalExpected) {
               setIsGenerating(false);
               setGeneratingStage("");
+              streamFinished = true;
               reader.cancel().catch(() => {});
-              break outer;
+              break;
             }
           } else if (event.type === "done") {
             setIsGenerating(false);
@@ -406,15 +410,16 @@ export default function GovernanceStarterPage() {
                 ? "Training document standards applied."
                 : "No training document — configure one in Admin > AI Settings.",
             });
+            streamFinished = true;
             reader.cancel().catch(() => {});
-            break outer;
+            break;
           } else if (event.type === "timeline") {
             setTimelineSheetUrl(event.sheetUrl as string);
             toast.success("Smartsheet timeline created", { description: "Your project timeline has been written to Smartsheet." });
           } else if (event.type === "timeline_error") {
             toast.warning("Timeline generation failed", { description: event.error as string });
           } else if (event.type === "error") {
-            throw new Error(event.error ?? "Generation failed");
+            throw new Error((event.error as string) ?? "Generation failed");
           }
         }
       }
