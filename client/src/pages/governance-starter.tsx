@@ -394,6 +394,8 @@ export default function GovernanceStarterPage() {
             if (totalExpected > 0 && docsReceived >= totalExpected) {
               setIsGenerating(false);
               setGeneratingStage("");
+              reader.cancel();
+              break;
             }
           } else if (event.type === "done") {
             setIsGenerating(false);
@@ -404,6 +406,8 @@ export default function GovernanceStarterPage() {
                 ? "Training document standards applied."
                 : "No training document — configure one in Admin > AI Settings.",
             });
+            reader.cancel();
+            break;
           } else if (event.type === "timeline") {
             setTimelineSheetUrl(event.sheetUrl as string);
             toast.success("Smartsheet timeline created", { description: "Your project timeline has been written to Smartsheet." });

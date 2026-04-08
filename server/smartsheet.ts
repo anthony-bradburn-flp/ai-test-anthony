@@ -278,10 +278,8 @@ export async function upsertTimeline(
 }
 
 /**
- * Write tasks to the sheet as flat rows (no parentId hierarchy).
- * Phase headers are written as bold rows; tasks follow immediately after their phase header.
- * Flat rows avoid conflicting with Smartsheet's dependency/project settings — adding rows
- * with parentId can cause Smartsheet to disable the Dependencies setting automatically.
+ * Write tasks to the sheet with phase-header hierarchy (parentId).
+ * Phase headers are bold parent rows; tasks are indented children underneath.
  *
  * Columns are looked up by name so order doesn't matter and extra Smartsheet-injected
  * columns (e.g. % Complete, Duration added when Gantt/dependencies are enabled) don't
@@ -317,60 +315,46 @@ async function writeTaskRowsWithHierarchy(
     tasksByPhase.get(task.phase)!.push(task);
   }
 
-  // Build a flat list of all rows: bold phase header followed by its tasks
-  // No parentId — flat rows prevent conflicts with Smartsheet dependency settings
-  const allRowBodies: any[] = [];
-  for (const phase of phases) {
-    allRowBodies.push({
-      toBottom: true,
-      bold: true,
-      cells: [{ columnId: cTask, value: phase }],
-    });
-    for (const task of tasksByPhase.get(phase)!) {
-      allRowBodies.push({
-        toBottom: true,
-        cells: [
-          cTask   && { columnId: cTask,   value: task.taskName },
-          cStart  && { columnId: cStart,  value: task.startDate },
-          cEnd    && { columnId: cEnd,    value: task.endDate },
-          cOwner  && { columnId: cOwner,  value: task.owner },
-          cStatus && { columnId: cStatus, value: task.status },
-          cNotes  && { columnId: cNotes,  value: task.notes },
-        ].filter(Boolean),
-      });
-    }
-  }
-
   // task 1-based index → { rowNumber, rowId } for predecessor pass
-  // Only task rows (not phase headers) are tracked; phase header rows are skipped
   const taskRowInfo = new Map<number, { rowNumber: number; rowId: number }>();
   let taskIndex = 0;
-  let flatIndex = 0; // index into allRowBodies / addedRows
 
-  // Which flat indices are task rows (not phase headers)
-  const taskFlatIndices: number[] = [];
+  // Write phase header rows then child task rows in hierarchy
   for (const phase of phases) {
-    flatIndex++; // phase header
-    for (let i = 0; i < tasksByPhase.get(phase)!.length; i++) {
-      taskFlatIndices.push(flatIndex++);
+    // Add bold phase header row
+    const headerResult = await client.sheets.addRows({
+      sheetId,
+      body: [{
+        toBottom: true,
+        bold: true,
+        cells: [{ columnId: cTask, value: phase }],
+      }],
+    });
+    const headerRow = (headerResult.result ?? headerResult)[0];
+    const headerRowId: number = headerRow.id;
+
+    // Add task rows as children of the phase header
+    const phaseTasks = tasksByPhase.get(phase)!;
+    const taskBodies = phaseTasks.map((task) => ({
+      parentId: headerRowId,
+      toBottom: true,
+      cells: [
+        cTask   && { columnId: cTask,   value: task.taskName },
+        cStart  && { columnId: cStart,  value: task.startDate },
+        cEnd    && { columnId: cEnd,    value: task.endDate },
+        cOwner  && { columnId: cOwner,  value: task.owner },
+        cStatus && { columnId: cStatus, value: task.status },
+        cNotes  && { columnId: cNotes,  value: task.notes },
+      ].filter(Boolean),
+    }));
+
+    const taskResult = await client.sheets.addRows({ sheetId, body: taskBodies });
+    const addedTaskRows: any[] = taskResult.result ?? taskResult;
+    for (const row of addedTaskRows) {
+      taskIndex++;
+      taskRowInfo.set(taskIndex, { rowNumber: row.rowNumber, rowId: row.id });
     }
   }
-
-  // Add rows in batches of 500
-  const allAddedRows: any[] = [];
-  for (let i = 0; i < allRowBodies.length; i += 500) {
-    const result = await client.sheets.addRows({
-      sheetId,
-      body: allRowBodies.slice(i, i + 500),
-    });
-    allAddedRows.push(...(result.result ?? result));
-  }
-
-  // Map task 1-based index → row info using the flat index positions
-  taskFlatIndices.forEach((fi, ti) => {
-    const row = allAddedRows[fi];
-    if (row) taskRowInfo.set(ti + 1, { rowNumber: row.rowNumber, rowId: row.id });
-  });
 
   // Pass 2: re-fetch sheet to get live column state (Smartsheet may have added/changed
   // system columns like Predecessor after row operations)
