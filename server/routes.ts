@@ -616,6 +616,13 @@ export async function registerRoutes(
     res.json(await storage.listDrafts(req.session.userId!));
   });
 
+  app.get("/api/drafts/:id", requireAuth, async (req, res) => {
+    const draft = await storage.getDraft(req.params.id);
+    if (!draft) return res.status(404).json({ message: "Not found" });
+    if (draft.userId !== req.session.userId) return res.status(403).json({ message: "Forbidden" });
+    res.json(draft);
+  });
+
   app.post("/api/drafts", requireAuth, async (req, res) => {
     const { clientName, projectName, formData } = req.body;
     if (!clientName?.trim() || !projectName?.trim()) {
