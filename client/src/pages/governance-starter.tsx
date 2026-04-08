@@ -310,6 +310,17 @@ export default function GovernanceStarterPage() {
   const watchedProjectType = form.watch("projectType");
   const watchedProjectValue = parseFloat(form.watch("value") || "0");
   const watchedBillingMilestones = form.watch("billingMilestones");
+
+  // Cascade project value change → recalculate all milestone £ values from their percentages
+  useEffect(() => {
+    if (!isFinite(watchedProjectValue) || watchedProjectValue <= 0) return;
+    const milestones = form.getValues("billingMilestones");
+    milestones.forEach((m, index) => {
+      const pct = Number(m.percentage) || 0;
+      form.setValue(`billingMilestones.${index}.value`, Math.round((pct / 100) * watchedProjectValue * 100) / 100, { shouldValidate: false });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedProjectValue]);
   useEffect(() => {
     if (!watchedProjectType || !availablePackages || !availableTemplates) return;
     const pkg = availablePackages.find((p) => p.type === watchedProjectType);
@@ -839,7 +850,18 @@ export default function GovernanceStarterPage() {
                         <span>Value (GBP) <span className="text-destructive font-extrabold ml-1">*</span></span>
                       </FormLabel>
                       <FormControl>
-                        <Input type="number" min="0" step="0.01" placeholder="e.g. 25000" {...field} />
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="e.g. 25000"
+                          {...field}
+                          onBlur={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (isFinite(val)) field.onChange(val.toFixed(2));
+                            field.onBlur();
+                          }}
+                        />
                       </FormControl>
                       <FormDescription className="text-xs">Currency field (stored as a number).</FormDescription>
                       <FormMessage />
@@ -957,6 +979,11 @@ export default function GovernanceStarterPage() {
                                     if (isFinite(watchedProjectValue) && watchedProjectValue > 0) {
                                       form.setValue(`billingMilestones.${index}.percentage`, Math.round((val / watchedProjectValue) * 10000) / 100, { shouldValidate: false });
                                     }
+                                  }}
+                                  onBlur={(e) => {
+                                    const val = parseFloat(e.target.value);
+                                    if (isFinite(val)) form.setValue(`billingMilestones.${index}.value`, Math.round(val * 100) / 100, { shouldValidate: false });
+                                    field.onBlur();
                                   }}
                                 />
                               </FormControl>
