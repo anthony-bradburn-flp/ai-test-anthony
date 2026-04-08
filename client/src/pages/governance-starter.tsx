@@ -91,12 +91,15 @@ type FormValues = z.infer<typeof formSchema>;
 
 type GeneratedDocument = { name: string; filename: string; format: string; content: string; preview: string };
 
-function SectionCard({ id, title, badge, children }: { id: string; title: string; badge: string; children: React.ReactNode }) {
+function SectionCard({ id, title, badge, action, children }: { id: string; title: string; badge: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="overflow-hidden rounded-[14px] border border-border bg-card shadow-[0_6px_18px_rgba(17,24,39,0.08)]">
       <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-[14px] dark:bg-muted/80">
         <h2 id={id} className="text-base font-bold text-foreground m-0">{title}</h2>
-        <span className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground">{badge}</span>
+        <div className="flex items-center gap-2">
+          {action}
+          <span className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground">{badge}</span>
+        </div>
       </div>
       <div className="p-4">{children}</div>
     </section>
@@ -621,15 +624,6 @@ export default function GovernanceStarterPage() {
             </p>
           </div>
           <div className="flex gap-2 flex-wrap justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              className="font-bold"
-              onClick={saveDraft}
-              disabled={isGenerating || isSavingDraft}
-            >
-              {isSavingDraft ? "Saving…" : currentDraftId ? "Update Draft" : "Save Draft"}
-            </Button>
             <Link href="/my-projects">
               <Button variant="outline" className="font-bold">My Projects</Button>
             </Link>
@@ -657,7 +651,23 @@ export default function GovernanceStarterPage() {
           <form className="grid gap-4" onSubmit={form.handleSubmit(onSubmit, onInvalid)} noValidate>
             
             {/* Section 1 */}
-            <SectionCard id="s1" title="Section 1 – Project Information" badge="All fields mandatory">
+            <SectionCard
+              id="s1"
+              title="Section 1 – Project Information"
+              badge="All fields mandatory"
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={saveDraft}
+                  disabled={isGenerating || isSavingDraft}
+                  className="font-bold text-xs h-7"
+                >
+                  {isSavingDraft ? "Saving…" : currentDraftId ? "Update Draft" : "Save Draft"}
+                </Button>
+              }
+            >
               <div className="grid grid-cols-12 gap-3">
                 {/* Client select */}
                 <div className="col-span-12 md:col-span-3">
