@@ -1030,81 +1030,75 @@ export async function registerRoutes(
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
 
-      // Optionally generate Smartsheet timeline — done before closing the stream so the
-      // timeline event reaches the client. DB saves happen in the background after res.end().
-      let timelineSheetId: string | null = null;
-      let timelineSheetUrl: string | null = null;
-      let timelineNewVersion: number | null = null;
-      if (generateTimeline && projectId) {
-        try {
-          const project = await storage.getProject(projectId);
-          if (project) {
-            const tasks = await generateTimelineTasks(project, settings);
-            const existing = project.smartsheetId;
-            const tlResult = existing
-              ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
-              : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
-            timelineSheetId = tlResult.sheetId ?? null;
-            timelineSheetUrl = tlResult.sheetUrl;
-            timelineNewVersion = ((project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
-            send({ type: "timeline", sheetUrl: timelineSheetUrl });
-          }
-        } catch (timelineErr: any) {
-          console.error("[generate] Timeline generation failed:", timelineErr?.message ?? timelineErr);
-          send({ type: "timeline_error", error: timelineErr?.message ?? "Timeline generation failed" });
-        }
-      }
-
       send({ type: "done", provider: settings.provider });
       // Close the stream immediately — the client exits generating state now.
-      // DB persistence happens in the background so it doesn't block the response.
+      // DB persistence and timeline generation happen in the background.
       res.end();
 
-      // --- Persist documents against project (background, does not block client) ---
-      if (projectId && generatedDocBuffers.length > 0) {
+      // --- Persist documents and generate timeline in background (does not block client) ---
+      if (projectId) {
         const savedUserId = req.session.userId!;
+        const doGenTimeline = generateTimeline;
         (async () => {
           try {
-            const projectDir = join(DOCUMENTS_DIR, projectId);
-            if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
-            const existingDocs = await storage.listDocuments(projectId);
-            const runId = randomBytes(8).toString("hex");
+            // Save documents first
+            if (generatedDocBuffers.length > 0) {
+              const projectDir = join(DOCUMENTS_DIR, projectId);
+              if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+              const existingDocs = await storage.listDocuments(projectId);
+              const runId = randomBytes(8).toString("hex");
 
-            // Determine next version number
-            let nextVersion = 1;
-            if (existingDocs.length > 0) {
-              if (versionMode === "replace") {
-                await storage.deleteDocumentsByProject(projectId);
-              } else {
-                const maxVersion = Math.max(...existingDocs.map((d) => d.version));
-                nextVersion = maxVersion + 1;
-                await storage.markDocumentsNotLatest(projectId);
+              let nextVersion = 1;
+              if (existingDocs.length > 0) {
+                if (versionMode === "replace") {
+                  await storage.deleteDocumentsByProject(projectId);
+                } else {
+                  const maxVersion = Math.max(...existingDocs.map((d) => d.version));
+                  nextVersion = maxVersion + 1;
+                  await storage.markDocumentsNotLatest(projectId);
+                }
+              }
+
+              for (const { name, filename, format, buffer } of generatedDocBuffers) {
+                const docId = randomBytes(8).toString("hex");
+                const storagePath = `documents/${projectId}/${docId}_${filename}`;
+                const fullPath = join(DATA_DIR, storagePath);
+                writeFileSync(fullPath, buffer);
+                await storage.createDocument({
+                  projectId, name, filename, format,
+                  storagePath, fileSize: buffer.length,
+                  generatedAt: new Date().toISOString(),
+                  generatedBy: savedUserId,
+                  runId, version: nextVersion,
+                  versionLabel: `v${nextVersion}`, isLatest: true,
+                });
+              }
+              await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+            }
+
+            // Then generate timeline (can take 60-120s — runs after client already exited)
+            if (doGenTimeline) {
+              try {
+                const project = await storage.getProject(projectId);
+                if (project) {
+                  const tasks = await generateTimelineTasks(project, settings);
+                  const existing = project.smartsheetId;
+                  const tlResult = existing
+                    ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
+                    : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
+                  const timelineSheetUrl = tlResult.sheetUrl;
+                  const timelineNewVersion = ((project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
+                  await storage.updateProject(projectId, {
+                    smartsheetId: tlResult.sheetId ?? undefined,
+                    smartsheetUrl: timelineSheetUrl,
+                    timelineGeneratedAt: new Date().toISOString(),
+                    timelineVersion: timelineNewVersion,
+                  });
+                }
+              } catch (timelineErr: any) {
+                console.error("[generate] Background timeline generation failed:", timelineErr?.message ?? timelineErr);
               }
             }
-
-            for (const { name, filename, format, buffer } of generatedDocBuffers) {
-              const docId = randomBytes(8).toString("hex");
-              const storagePath = `documents/${projectId}/${docId}_${filename}`;
-              const fullPath = join(DATA_DIR, storagePath);
-              writeFileSync(fullPath, buffer);
-              await storage.createDocument({
-                projectId, name, filename, format,
-                storagePath, fileSize: buffer.length,
-                generatedAt: new Date().toISOString(),
-                generatedBy: savedUserId,
-                runId, version: nextVersion,
-                versionLabel: `v${nextVersion}`, isLatest: true,
-              });
-            }
-
-            const projectUpdate: Record<string, unknown> = { lastGeneratedAt: new Date().toISOString() };
-            if (timelineSheetId) projectUpdate.smartsheetId = timelineSheetId;
-            if (timelineSheetUrl) {
-              projectUpdate.smartsheetUrl = timelineSheetUrl;
-              projectUpdate.timelineGeneratedAt = new Date().toISOString();
-              projectUpdate.timelineVersion = timelineNewVersion;
-            }
-            await storage.updateProject(projectId, projectUpdate);
           } catch (saveErr) {
             console.error("[generate] Failed to save documents:", saveErr);
           }
