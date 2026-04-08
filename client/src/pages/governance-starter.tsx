@@ -394,7 +394,7 @@ export default function GovernanceStarterPage() {
             if (totalExpected > 0 && docsReceived >= totalExpected) {
               setIsGenerating(false);
               setGeneratingStage("");
-              await reader.cancel();
+              reader.cancel().catch(() => {});
               break outer;
             }
           } else if (event.type === "done") {
@@ -406,7 +406,7 @@ export default function GovernanceStarterPage() {
                 ? "Training document standards applied."
                 : "No training document — configure one in Admin > AI Settings.",
             });
-            await reader.cancel();
+            reader.cancel().catch(() => {});
             break outer;
           } else if (event.type === "timeline") {
             setTimelineSheetUrl(event.sheetUrl as string);
