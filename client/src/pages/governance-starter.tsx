@@ -165,6 +165,40 @@ export default function GovernanceStarterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
+  // Pre-load supporting docs when ?projectId= is in the URL (e.g. navigating from My Projects)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get("projectId");
+    if (!projectId) return;
+    fetch(`/api/projects/${projectId}/supporting-docs`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(async (docs: Array<{ id: string; name: string; fileSize: number }>) => {
+        if (!docs.length) return;
+        // Fetch base64 content for each supporting doc and pre-populate the uploads list
+        const loaded: Array<{ name: string; content: string; size: number }> = [];
+        for (const doc of docs) {
+          try {
+            const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            const content = await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve((reader.result as string).split(",")[1]);
+              reader.readAsDataURL(blob);
+            });
+            loaded.push({ name: doc.name, content, size: doc.fileSize });
+          } catch { /* skip */ }
+        }
+        if (loaded.length) {
+          setUploads(loaded);
+          toast.info(`${loaded.length} supporting document${loaded.length !== 1 ? "s" : ""} loaded from previous generation.`);
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
   const { data: smartsheetEnabled } = useQuery<{ enabled: boolean }>({
     queryKey: ["/api/smartsheet/enabled"],
     queryFn: async () => {
@@ -477,24 +511,26 @@ export default function GovernanceStarterPage() {
       setSelectedClientId(clientId);
     }
 
-    // Ensure project exists
+    // Ensure project exists — create new or update existing with current form values
     let projectId = selectedProjectId || undefined;
+    const sponsor = values.clientStakeholders[values.sponsorIndex] ?? values.clientStakeholders[0];
+    const projectPayload = {
+      clientId, clientName: values.client,
+      sheetRef: values.sheetRef, projectName: values.projectName,
+      projectType: values.projectType, projectSize: values.projectSize,
+      value: values.value, startDate: values.startDate, endDate: values.endDate,
+      summary: values.summary,
+      sponsorName: sponsor?.name ?? "", sponsorRole: sponsor?.role ?? "",
+      billingMilestones: values.billingMilestones,
+      flipsideStakeholders: values.flipsideStakeholders,
+      clientStakeholders: values.clientStakeholders,
+    };
     if (!projectId && clientId) {
-      const sponsor = values.clientStakeholders[values.sponsorIndex] ?? values.clientStakeholders[0];
+      // New project — create it
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId, clientName: values.client,
-          sheetRef: values.sheetRef, projectName: values.projectName,
-          projectType: values.projectType, projectSize: values.projectSize,
-          value: values.value, startDate: values.startDate, endDate: values.endDate,
-          summary: values.summary,
-          sponsorName: sponsor?.name ?? "", sponsorRole: sponsor?.role ?? "",
-          billingMilestones: values.billingMilestones,
-          flipsideStakeholders: values.flipsideStakeholders,
-          clientStakeholders: values.clientStakeholders,
-        }),
+        body: JSON.stringify(projectPayload),
       });
       if (res.ok) {
         const project = await res.json();
@@ -502,6 +538,14 @@ export default function GovernanceStarterPage() {
         setSelectedProjectId(project.id);
         queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
       }
+    } else if (projectId) {
+      // Existing project — update with latest form values so DB stays in sync
+      await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(projectPayload),
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
     }
 
     // If existing project already has docs, ask to replace or version

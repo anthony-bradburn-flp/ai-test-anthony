@@ -1,7 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs";
+import { writeFile } from "fs/promises";
 import { join, extname } from "path";
 import { sendEmail, emailEnabled } from "./email";
 import rateLimit from "express-rate-limit";
@@ -13,7 +14,7 @@ import mammoth from "mammoth";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } from "docx";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
-import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, DATA_DIR } from "./storage";
+import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, SUPPORTING_DOCS_DIR, DATA_DIR } from "./storage";
 import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey, hasSmartsheetKey } from "./secrets";
 import { verifySmartsheetConnection, generateTimelineTasks, createTimelineSheet, upsertTimeline } from "./smartsheet";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
@@ -658,6 +659,22 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // --- Supporting Documents ---
+  app.get("/api/projects/:id/supporting-docs", requireAuth, async (req, res) => {
+    const docs = await storage.listSupportingDocs(req.params.id);
+    res.json(docs);
+  });
+
+  app.get("/api/supporting-docs/:id/download", requireAuth, async (req, res) => {
+    const doc = await storage.getSupportingDoc(req.params.id);
+    if (!doc) return res.status(404).json({ message: "Not found" });
+    const fullPath = join(DATA_DIR, doc.storagePath);
+    if (!existsSync(fullPath)) return res.status(404).json({ message: "File not found on disk" });
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(doc.name)}"`);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.sendFile(fullPath);
+  });
+
   // --- Smartsheet ---
 
   app.get("/api/smartsheet/enabled", requireAuth, async (_req, res) => {
@@ -1083,75 +1100,125 @@ export async function registerRoutes(
       // DB persistence and timeline generation happen in the background.
       res.end();
 
-      // --- Persist documents and generate timeline in background (does not block client) ---
+      // --- Persist documents, supporting docs, and generate timeline in background ---
+      // The async IIFE starts immediately; its first await yields the event loop,
+      // allowing the HTTP response buffer (done + res.end) to flush to the client.
       if (projectId) {
         const savedUserId = req.session.userId!;
         const doGenTimeline = generateTimeline;
         const capturedSupportingDocs = supportingDocs;
+        const capturedProjectData = projectData; // current form values — fresher than DB
+        const capturedRawDocs = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : []) as Array<{ name: string; content: string }>;
         (async () => {
           try {
-            // Save documents first
-            if (generatedDocBuffers.length > 0) {
-              const projectDir = join(DOCUMENTS_DIR, projectId);
-              if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
-              const existingDocs = await storage.listDocuments(projectId);
-              const runId = randomBytes(8).toString("hex");
+              // 1. Save generated documents (async writes to avoid blocking event loop)
+              if (generatedDocBuffers.length > 0) {
+                const projectDir = join(DOCUMENTS_DIR, projectId);
+                if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+                const existingDocs = await storage.listDocuments(projectId);
+                const runId = randomBytes(8).toString("hex");
 
-              let nextVersion = 1;
-              if (existingDocs.length > 0) {
-                if (versionMode === "replace") {
-                  await storage.deleteDocumentsByProject(projectId);
-                } else {
-                  const maxVersion = Math.max(...existingDocs.map((d) => d.version));
-                  nextVersion = maxVersion + 1;
-                  await storage.markDocumentsNotLatest(projectId);
+                let nextVersion = 1;
+                if (existingDocs.length > 0) {
+                  if (versionMode === "replace") {
+                    await storage.deleteDocumentsByProject(projectId);
+                  } else {
+                    const maxVersion = Math.max(...existingDocs.map((d) => d.version));
+                    nextVersion = maxVersion + 1;
+                    await storage.markDocumentsNotLatest(projectId);
+                  }
                 }
-              }
 
-              for (const { name, filename, format, buffer } of generatedDocBuffers) {
-                const docId = randomBytes(8).toString("hex");
-                const storagePath = `documents/${projectId}/${docId}_${filename}`;
-                const fullPath = join(DATA_DIR, storagePath);
-                writeFileSync(fullPath, buffer);
-                await storage.createDocument({
-                  projectId, name, filename, format,
-                  storagePath, fileSize: buffer.length,
-                  generatedAt: new Date().toISOString(),
-                  generatedBy: savedUserId,
-                  runId, version: nextVersion,
-                  versionLabel: `v${nextVersion}`, isLatest: true,
-                });
-              }
-              await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
-            }
-
-            // Then generate timeline (can take 60-120s — runs after client already exited)
-            if (doGenTimeline) {
-              try {
-                const project = await storage.getProject(projectId);
-                if (project) {
-                  const tasks = await generateTimelineTasks(project, settings, capturedSupportingDocs);
-                  const existing = project.smartsheetId;
-                  const tlResult = existing
-                    ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
-                    : await createTimelineSheet(project, tasks, settings.smartsheetWorkspaceId);
-                  const timelineSheetUrl = tlResult.sheetUrl;
-                  const timelineNewVersion = ((project.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
-                  await storage.updateProject(projectId, {
-                    smartsheetId: tlResult.sheetId ?? undefined,
-                    smartsheetUrl: timelineSheetUrl,
-                    timelineGeneratedAt: new Date().toISOString(),
-                    timelineVersion: timelineNewVersion,
+                for (const { name, filename, format, buffer } of generatedDocBuffers) {
+                  const docId = randomBytes(8).toString("hex");
+                  const storagePath = `documents/${projectId}/${docId}_${filename}`;
+                  const fullPath = join(DATA_DIR, storagePath);
+                  await writeFile(fullPath, buffer); // async — does not block event loop
+                  await storage.createDocument({
+                    projectId, name, filename, format,
+                    storagePath, fileSize: buffer.length,
+                    generatedAt: new Date().toISOString(),
+                    generatedBy: savedUserId,
+                    runId, version: nextVersion,
+                    versionLabel: `v${nextVersion}`, isLatest: true,
                   });
                 }
-              } catch (timelineErr: any) {
-                console.error("[generate] Background timeline generation failed:", timelineErr?.message ?? timelineErr);
+                await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
               }
+
+              // 2. Save supporting documents (replace any existing ones for this project)
+              if (capturedRawDocs.length > 0) {
+                try {
+                  const projectSuppDir = join(SUPPORTING_DOCS_DIR, projectId);
+                  if (!existsSync(projectSuppDir)) mkdirSync(projectSuppDir, { recursive: true });
+                  // Remove old supporting docs files + DB records
+                  const oldDocs = await storage.deleteSupportingDocsByProject(projectId);
+                  for (const old of oldDocs) {
+                    try { unlinkSync(join(DATA_DIR, old.storagePath)); } catch { /* file may already be gone */ }
+                  }
+                  // Save new ones
+                  for (const doc of capturedRawDocs) {
+                    const ext = extname(doc.name) || ".bin";
+                    const docId = randomBytes(8).toString("hex");
+                    const filename = `${docId}${ext}`;
+                    const storagePath = `supporting-docs/${projectId}/${filename}`;
+                    const fullPath = join(DATA_DIR, storagePath);
+                    const buffer = Buffer.from(doc.content, "base64");
+                    await writeFile(fullPath, buffer);
+                    await storage.createSupportingDoc({
+                      projectId,
+                      name: doc.name,
+                      filename,
+                      storagePath,
+                      fileSize: buffer.length,
+                      uploadedAt: new Date().toISOString(),
+                      uploadedBy: savedUserId,
+                    });
+                  }
+                } catch (suppErr) {
+                  console.error("[generate] Failed to save supporting docs:", suppErr);
+                }
+              }
+
+              // 3. Generate timeline using CURRENT form data (not stale DB record)
+              if (doGenTimeline) {
+                try {
+                  const dbProject = await storage.getProject(projectId);
+                  if (dbProject) {
+                    // Merge DB project (for IDs/smartsheet refs) with current form data (fresh stakeholders/dates)
+                    const mergedProject = {
+                      ...dbProject,
+                      projectName: capturedProjectData.projectName,
+                      projectType: capturedProjectData.projectType,
+                      projectSize: capturedProjectData.projectSize,
+                      startDate: capturedProjectData.startDate,
+                      endDate: capturedProjectData.endDate,
+                      summary: capturedProjectData.summary,
+                      billingMilestones: capturedProjectData.billingMilestones,
+                      flipsideStakeholders: capturedProjectData.flipsideStakeholders,
+                      clientStakeholders: capturedProjectData.clientStakeholders,
+                    };
+                    const tasks = await generateTimelineTasks(mergedProject, settings, capturedSupportingDocs);
+                    const existing = dbProject.smartsheetId;
+                    const tlResult = existing
+                      ? await upsertTimeline(existing, mergedProject, tasks, settings.smartsheetWorkspaceId)
+                      : await createTimelineSheet(mergedProject, tasks, settings.smartsheetWorkspaceId);
+                    const timelineNewVersion = ((dbProject.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
+                    await storage.updateProject(projectId, {
+                      smartsheetId: tlResult.sheetId ?? undefined,
+                      smartsheetUrl: tlResult.sheetUrl,
+                      timelineGeneratedAt: new Date().toISOString(),
+                      timelineVersion: timelineNewVersion,
+                    });
+                  }
+                } catch (timelineErr: any) {
+                  console.error("[generate] Background timeline generation failed:", timelineErr?.message ?? timelineErr);
+                }
+              }
+            } catch (saveErr) {
+              console.error("[generate] Failed to save documents:", saveErr);
             }
-          } catch (saveErr) {
-            console.error("[generate] Failed to save documents:", saveErr);
-          }
-        })();
+          })();
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
