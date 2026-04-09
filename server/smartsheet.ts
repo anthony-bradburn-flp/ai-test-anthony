@@ -79,9 +79,10 @@ export async function verifySmartsheetConnection(): Promise<{ connected: boolean
 /** Generate timeline tasks using the configured AI provider. */
 export async function generateTimelineTasks(
   project: Project,
-  settings: { provider?: string | null }
+  settings: { provider?: string | null },
+  supportingDocs: Array<{ name: string; content: string }> = []
 ): Promise<TimelineTask[]> {
-  const prompt = buildTimelinePrompt(project);
+  const prompt = buildTimelinePrompt(project, supportingDocs);
 
   let raw: string;
   if (settings.provider === "anthropic") {
@@ -109,7 +110,7 @@ export async function generateTimelineTasks(
   return parseTasksFromResponse(raw);
 }
 
-function buildTimelinePrompt(project: Project): string {
+function buildTimelinePrompt(project: Project, supportingDocs: Array<{ name: string; content: string }> = []): string {
   const milestones = (project.billingMilestones as { stage: string; percentage: number; date: string }[])
     .map((m) => `  - ${m.stage} (${m.percentage}%): ${m.date}`)
     .join("\n");
@@ -119,6 +120,10 @@ function buildTimelinePrompt(project: Project): string {
   const clientTeam = (project.clientStakeholders as { name: string; role: string }[])
     .map((s) => `  - ${s.name} (${s.role})`)
     .join("\n");
+
+  const supportingDocsSection = supportingDocs.length > 0
+    ? `\nSupporting documents (use phases, tasks, and structure described here to inform your timeline):\n${supportingDocs.map((d) => `--- ${d.name} ---\n${d.content.slice(0, 3000)}`).join("\n\n")}\n`
+    : "";
 
   return `You are a project management expert. Generate a detailed project timeline as a JSON object.
 
@@ -138,7 +143,7 @@ ${flipsideTeam}
 
 Client team (own client-side tasks):
 ${clientTeam}
-
+${supportingDocsSection}
 Return a JSON object with a single key "tasks" containing an array. Tasks are numbered 1..N in order.
 Each task must have exactly these fields:
 {
@@ -155,6 +160,7 @@ Each task must have exactly these fields:
 
 Guidelines:
 - Generate 15–30 tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
+- If supporting documents describe specific phases, workstreams or deliverables, reflect those in the task list and phase names
 - Assign phases based on logical project stages (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that fit a ${project.projectType} project — not all apply.
 - Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates
 - Owner assignment rules:

@@ -1087,6 +1087,7 @@ export async function registerRoutes(
       if (projectId) {
         const savedUserId = req.session.userId!;
         const doGenTimeline = generateTimeline;
+        const capturedSupportingDocs = supportingDocs;
         (async () => {
           try {
             // Save documents first
@@ -1129,7 +1130,7 @@ export async function registerRoutes(
               try {
                 const project = await storage.getProject(projectId);
                 if (project) {
-                  const tasks = await generateTimelineTasks(project, settings);
+                  const tasks = await generateTimelineTasks(project, settings, capturedSupportingDocs);
                   const existing = project.smartsheetId;
                   const tlResult = existing
                     ? await upsertTimeline(existing, project, tasks, settings.smartsheetWorkspaceId)
