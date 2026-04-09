@@ -1239,6 +1239,7 @@ export async function registerRoutes(
         });
       }
 
+      console.log(`[generate] sending done event at ${new Date().toISOString()}`);
       send({ type: "done", provider: settings.provider });
       // Close the stream — fires the 'finish' event once fully flushed, triggering background work.
       res.end();

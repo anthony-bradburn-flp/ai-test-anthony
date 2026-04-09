@@ -161,8 +161,9 @@ Each task must have exactly these fields:
 
 Guidelines:
 - Generate 15–30 tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
+- Read the project summary carefully — if it describes specific phases, workstreams or stages, use EXACTLY those as your phase names. Do not invent generic phase names when the summary provides them.
 - If supporting documents describe specific phases, workstreams or deliverables, reflect those in the task list and phase names
-- Assign phases based on logical project stages (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that fit a ${project.projectType} project — not all apply.
+- Otherwise assign phases based on logical project stages (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that fit a ${project.projectType} project — not all apply.
 - Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates
 - Owner assignment rules:
   * Flipside team members own: project management, design, development, UAT amend fixes, DevOps, delivery tasks
@@ -215,18 +216,24 @@ export async function createTimelineSheet(
     sheet = await client.sheets.createSheet({ body: { name: sheetName, columns } });
   }
 
-  const numericSheetId: number = Number(sheet.result?.id ?? sheet.id);
+  // The create response wraps the sheet in `.result`; extract it
+  const createdSheet = sheet.result ?? sheet;
+  const numericSheetId: number = Number(createdSheet.id);
   const sheetId: string = String(numericSheetId);
 
-  // Fetch columns to build the name→id map
-  const sheetDetails = await client.sheets.getSheet({ sheetId: numericSheetId });
-  const colMap = buildColMap(sheetDetails.columns ?? []);
+  // Use columns from the create response — avoids an immediate GET that can
+  // return 404 due to Smartsheet's brief post-creation propagation delay.
+  const colMap = buildColMap(createdSheet.columns ?? []);
 
   // Write task rows grouped by phase with hierarchy
   await writeTaskRowsWithHierarchy(client, numericSheetId, colMap, tasks);
 
-  const finalSheet = await client.sheets.getSheet({ sheetId: numericSheetId });
-  const sheetUrl: string = finalSheet.permalink ?? `https://app.smartsheet.com/sheets/${sheetId}`;
+  // Fetch permalink after rows are written (sheet is definitely accessible by now)
+  let sheetUrl = `https://app.smartsheet.com/sheets/${sheetId}`;
+  try {
+    const finalSheet = await client.sheets.getSheet({ sheetId: numericSheetId });
+    sheetUrl = (finalSheet.permalink ?? finalSheet.result?.permalink) ?? sheetUrl;
+  } catch { /* use constructed URL as fallback */ }
 
   return { sheetId, sheetUrl };
 }
