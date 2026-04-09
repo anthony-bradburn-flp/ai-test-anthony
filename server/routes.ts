@@ -568,6 +568,11 @@ export async function registerRoutes(
 
   app.delete("/api/projects/:id", requireAdmin, async (req, res) => {
     await storage.deleteDocumentsByProject(req.params.id);
+    // Remove supporting docs files + DB rows before deleting the project (FK constraint)
+    const suppDocs = await storage.deleteSupportingDocsByProject(req.params.id);
+    for (const doc of suppDocs) {
+      try { unlinkSync(join(DATA_DIR, doc.storagePath)); } catch { /* already gone */ }
+    }
     await storage.deleteProject(req.params.id);
     res.json({ ok: true });
   });
@@ -1234,6 +1239,7 @@ export async function registerRoutes(
         });
       }
 
+      console.log(`[generate] sending done event at ${new Date().toISOString()}`);
       send({ type: "done", provider: settings.provider });
       // Close the stream — fires the 'finish' event once fully flushed, triggering background work.
       res.end();
