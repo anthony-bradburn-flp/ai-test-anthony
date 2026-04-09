@@ -697,7 +697,22 @@ export async function registerRoutes(
 
     try {
       const settings = await storage.getAiSettings();
-      const tasks = await generateTimelineTasks(project, settings);
+
+      // Load supporting docs stored for this project and extract their text
+      const suppDocRecords = await storage.listSupportingDocs(project.id);
+      const supportingDocs: Array<{ name: string; content: string }> = [];
+      for (const docRecord of suppDocRecords) {
+        const fullPath = join(DATA_DIR, docRecord.storagePath);
+        if (existsSync(fullPath)) {
+          try {
+            const base64 = readFileSync(fullPath).toString("base64");
+            const { content } = await extractSupportingDocText(docRecord.name, base64);
+            if (content) supportingDocs.push({ name: docRecord.name, content });
+          } catch { /* skip unreadable files */ }
+        }
+      }
+
+      const tasks = await generateTimelineTasks(project, settings, supportingDocs);
 
       let sheetId = project.smartsheetId;
       let sheetUrl = project.smartsheetUrl ?? "";
@@ -1095,22 +1110,19 @@ export async function registerRoutes(
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
 
-      send({ type: "done", provider: settings.provider });
-      // Close the stream immediately — the client exits generating state now.
-      // DB persistence and timeline generation happen in the background.
-      res.end();
-
       // --- Persist documents, supporting docs, and generate timeline in background ---
-      // The async IIFE starts immediately; its first await yields the event loop,
-      // allowing the HTTP response buffer (done + res.end) to flush to the client.
+      // Register the background IIFE on the response 'finish' event so it only runs
+      // AFTER the HTTP response body (done event) has been fully flushed to the OS.
+      // This guarantees the client receives the done event before any background I/O starts.
       if (projectId) {
         const savedUserId = req.session.userId!;
         const doGenTimeline = generateTimeline;
         const capturedSupportingDocs = supportingDocs;
         const capturedProjectData = projectData; // current form values — fresher than DB
         const capturedRawDocs = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : []) as Array<{ name: string; content: string }>;
-        (async () => {
-          try {
+        res.once("finish", () => {
+          (async () => {
+            try {
               // 1. Save generated documents (async writes to avoid blocking event loop)
               if (generatedDocBuffers.length > 0) {
                 const projectDir = join(DOCUMENTS_DIR, projectId);
@@ -1219,7 +1231,12 @@ export async function registerRoutes(
               console.error("[generate] Failed to save documents:", saveErr);
             }
           })();
+        });
       }
+
+      send({ type: "done", provider: settings.provider });
+      // Close the stream — fires the 'finish' event once fully flushed, triggering background work.
+      res.end();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
       audit("GENERATE_FAILED", req, { error: message });
