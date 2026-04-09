@@ -446,6 +446,9 @@ export default function GovernanceStarterPage() {
               fetch(`/api/drafts/${currentDraftId}`, { method: "DELETE" }).catch(() => {});
               setCurrentDraftId(null);
             }
+            // Break immediately — don't wait for the stream to close (server may still be
+            // running background tasks after res.end(), keeping the socket alive briefly)
+            return;
           } else if (event.type === "error") {
             throw new Error((event.error as string) ?? "Generation failed");
           }
