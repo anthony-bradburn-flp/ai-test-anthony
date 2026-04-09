@@ -1101,17 +1101,16 @@ export async function registerRoutes(
       res.end();
 
       // --- Persist documents, supporting docs, and generate timeline in background ---
-      // setImmediate defers until after the current event-loop tick so the HTTP
-      // response (done event + res.end()) is flushed to the client first.
+      // The async IIFE starts immediately; its first await yields the event loop,
+      // allowing the HTTP response buffer (done + res.end) to flush to the client.
       if (projectId) {
         const savedUserId = req.session.userId!;
         const doGenTimeline = generateTimeline;
         const capturedSupportingDocs = supportingDocs;
         const capturedProjectData = projectData; // current form values — fresher than DB
         const capturedRawDocs = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : []) as Array<{ name: string; content: string }>;
-        setImmediate(() => {
-          (async () => {
-            try {
+        (async () => {
+          try {
               // 1. Save generated documents (async writes to avoid blocking event loop)
               if (generatedDocBuffers.length > 0) {
                 const projectDir = join(DOCUMENTS_DIR, projectId);
@@ -1220,7 +1219,6 @@ export async function registerRoutes(
               console.error("[generate] Failed to save documents:", saveErr);
             }
           })();
-        });
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "AI generation failed";
