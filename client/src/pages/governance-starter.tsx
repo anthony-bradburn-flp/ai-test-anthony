@@ -378,7 +378,8 @@ export default function GovernanceStarterPage() {
   const loadSupportingDocs = useCallback(async (projectId: string) => {
     try {
       const r = await fetch(`/api/projects/${projectId}/supporting-docs`);
-      const docs: Array<{ id: string; name: string; fileSize: number }> = r.ok ? await r.json() : [];
+      if (!r.ok) return;
+      const docs: Array<{ id: string; name: string; fileSize: number }> = await r.json();
       if (!docs.length) return;
       const loaded: Array<{ name: string; content: string; size: number }> = [];
       for (const doc of docs) {
@@ -386,19 +387,20 @@ export default function GovernanceStarterPage() {
           const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
           if (!res.ok) continue;
           const blob = await res.blob();
-          const content = await new Promise<string>((resolve) => {
+          const content = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.onerror = reject;
             reader.readAsDataURL(blob);
           });
           loaded.push({ name: doc.name, content, size: doc.fileSize });
-        } catch { /* skip */ }
+        } catch { /* skip individual doc */ }
       }
       if (loaded.length) {
         setUploads(loaded);
         toast.info(`${loaded.length} supporting document${loaded.length !== 1 ? "s" : ""} loaded.`);
       }
-    } catch { /* ignore */ }
+    } catch { /* ignore network errors */ }
   }, []);
 
   const onInvalid = () => {
@@ -497,10 +499,6 @@ export default function GovernanceStarterPage() {
               fetch(`/api/drafts/${currentDraftId}`, { method: "DELETE" }).catch(() => {});
               setCurrentDraftId(null);
             }
-            // Cancel the reader explicitly so the stream is released before we return.
-            // Without this, the reader can stay open while the server finishes background
-            // work, occasionally delaying the React state flush that clears the spinner.
-            try { reader.cancel(); } catch { /* ignore */ }
             return;
           } else if (event.type === "error") {
             throw new Error((event.error as string) ?? "Generation failed");
