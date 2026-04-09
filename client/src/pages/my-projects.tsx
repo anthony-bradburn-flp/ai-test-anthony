@@ -37,6 +37,7 @@ export default function MyProjectsPage() {
   const [clientFilter, setClientFilter] = useState("__all__");
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
   const [timelinePending, setTimelinePending] = useState<string | null>(null);
+  const [timelineElapsed, setTimelineElapsed] = useState(0);
   const [timelineError, setTimelineError] = useState<Record<string, string>>({});
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState<string | null>(null);
@@ -184,9 +185,12 @@ export default function MyProjectsPage() {
 
   const generateTimeline = async (project: Project, mode: "update" | "new" = project.smartsheetId ? "update" : "new") => {
     setTimelinePending(project.id);
+    setTimelineElapsed(0);
     setTimelineError((prev) => { const next = { ...prev }; delete next[project.id]; return next; });
+    const startTime = Date.now();
+    const elapsedInterval = setInterval(() => setTimelineElapsed(Math.floor((Date.now() - startTime) / 1000)), 1000);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 240_000);
+    const timeout = setTimeout(() => controller.abort(), 300_000); // 5 min max
     try {
       const res = await fetch(`/api/projects/${project.id}/timeline`, {
         method: "POST",
@@ -205,11 +209,13 @@ export default function MyProjectsPage() {
         ) as any,
       });
     } catch (err: any) {
-      const msg = err?.name === "AbortError" ? "Timed out — the sheet may still have been created in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
+      const msg = err?.name === "AbortError" ? "Timed out after 5 minutes — the sheet may still be processing in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
       setTimelineError((prev) => ({ ...prev, [project.id]: msg }));
     } finally {
       clearTimeout(timeout);
+      clearInterval(elapsedInterval);
       setTimelinePending(null);
+      setTimelineElapsed(0);
     }
   };
 
@@ -256,11 +262,11 @@ export default function MyProjectsPage() {
                     {smartsheetEnabled?.enabled && (
                       project.smartsheetId ? (
                         <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "update")}>
-                          <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Updating…" : "Update Timeline"}
+                          <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? `Updating… ${timelineElapsed > 0 ? `(${timelineElapsed}s)` : ""}` : "Update Timeline"}
                         </Button>
                       ) : (
                         <Button size="sm" variant="outline" className="font-bold" disabled={timelinePending === project.id} onClick={() => generateTimeline(project, "new")}>
-                          <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? "Creating…" : "Create Timeline"}
+                          <FileText className="h-3.5 w-3.5 mr-1" />{timelinePending === project.id ? `Creating… ${timelineElapsed > 0 ? `(${timelineElapsed}s)` : ""}` : "Create Timeline"}
                         </Button>
                       )
                     )}
