@@ -162,8 +162,8 @@ Each task must have exactly these fields:
 Guidelines:
 - Generate 15–30 tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
 - Use the project summary and any supporting documents as the primary guide for phase names and structure — if they describe specific phases or workstreams, reflect those in your task list. This is guidance, not a strict constraint.
-- Always include all relevant technical phases for this project type even if not explicitly mentioned in the summary (e.g. QA/Testing, UAT, Deployment, Go Live, Handover where applicable to a ${project.projectType} project)
-- If no specific phases are described, assign phases based on logical project stages (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that fit a ${project.projectType} project — not all apply.
+- Choose phases that genuinely fit the nature of this ${project.projectType} project — not all projects need QA, UAT, or Deployment phases (e.g. a content or strategy project would not). Only include technical delivery phases (Testing, UAT, Deployment, Go Live) if the project type and summary indicate they are relevant.
+- If no specific phases are described, assign phases based on logical project stages appropriate for a ${project.projectType} project (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover as applicable).
 - Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates
 - Owner assignment rules:
   * Flipside team members own: project management, design, development, UAT amend fixes, DevOps, delivery tasks
