@@ -511,24 +511,26 @@ export default function GovernanceStarterPage() {
       setSelectedClientId(clientId);
     }
 
-    // Ensure project exists
+    // Ensure project exists — create new or update existing with current form values
     let projectId = selectedProjectId || undefined;
+    const sponsor = values.clientStakeholders[values.sponsorIndex] ?? values.clientStakeholders[0];
+    const projectPayload = {
+      clientId, clientName: values.client,
+      sheetRef: values.sheetRef, projectName: values.projectName,
+      projectType: values.projectType, projectSize: values.projectSize,
+      value: values.value, startDate: values.startDate, endDate: values.endDate,
+      summary: values.summary,
+      sponsorName: sponsor?.name ?? "", sponsorRole: sponsor?.role ?? "",
+      billingMilestones: values.billingMilestones,
+      flipsideStakeholders: values.flipsideStakeholders,
+      clientStakeholders: values.clientStakeholders,
+    };
     if (!projectId && clientId) {
-      const sponsor = values.clientStakeholders[values.sponsorIndex] ?? values.clientStakeholders[0];
+      // New project — create it
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId, clientName: values.client,
-          sheetRef: values.sheetRef, projectName: values.projectName,
-          projectType: values.projectType, projectSize: values.projectSize,
-          value: values.value, startDate: values.startDate, endDate: values.endDate,
-          summary: values.summary,
-          sponsorName: sponsor?.name ?? "", sponsorRole: sponsor?.role ?? "",
-          billingMilestones: values.billingMilestones,
-          flipsideStakeholders: values.flipsideStakeholders,
-          clientStakeholders: values.clientStakeholders,
-        }),
+        body: JSON.stringify(projectPayload),
       });
       if (res.ok) {
         const project = await res.json();
@@ -536,6 +538,14 @@ export default function GovernanceStarterPage() {
         setSelectedProjectId(project.id);
         queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
       }
+    } else if (projectId) {
+      // Existing project — update with latest form values so DB stays in sync
+      await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(projectPayload),
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
     }
 
     // If existing project already has docs, ask to replace or version

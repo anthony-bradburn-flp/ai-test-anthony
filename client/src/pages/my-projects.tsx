@@ -284,9 +284,11 @@ export default function MyProjectsPage() {
                   </div>
                 </div>
                 {/* Supporting documents reference section */}
-                {supportingDocs.length > 0 && (
-                  <div className="mb-4">
-                    <p className="text-sm font-semibold mb-2">Supporting Documents</p>
+                <div className="mb-4">
+                  <p className="text-sm font-semibold mb-2">Supporting Documents</p>
+                  {supportingDocs.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No supporting documents uploaded. Upload them in the form when generating documents.</p>
+                  ) : (
                     <div className="flex flex-wrap gap-2">
                       {supportingDocs.map((doc) => (
                         <button
@@ -300,8 +302,8 @@ export default function MyProjectsPage() {
                         </button>
                       ))}
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {docs.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
