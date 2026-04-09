@@ -121,8 +121,9 @@ function buildTimelinePrompt(project: Project, supportingDocs: Array<{ name: str
     .map((s) => `  - ${s.name} (${s.role})`)
     .join("\n");
 
+  // Use the full extracted text (already capped at 15,000 chars each by extractSupportingDocText)
   const supportingDocsSection = supportingDocs.length > 0
-    ? `\nSupporting documents (use phases, tasks, and structure described here to inform your timeline):\n${supportingDocs.map((d) => `--- ${d.name} ---\n${d.content.slice(0, 3000)}`).join("\n\n")}\n`
+    ? `\nSupporting documents (use phases, tasks, and structure described here to inform your timeline):\n${supportingDocs.map((d) => `--- ${d.name} ---\n${d.content}`).join("\n\n")}\n`
     : "";
 
   return `You are a project management expert. Generate a detailed project timeline as a JSON object.
