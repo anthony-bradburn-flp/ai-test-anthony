@@ -165,6 +165,40 @@ export default function GovernanceStarterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
+  // Pre-load supporting docs when ?projectId= is in the URL (e.g. navigating from My Projects)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get("projectId");
+    if (!projectId) return;
+    fetch(`/api/projects/${projectId}/supporting-docs`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(async (docs: Array<{ id: string; name: string; fileSize: number }>) => {
+        if (!docs.length) return;
+        // Fetch base64 content for each supporting doc and pre-populate the uploads list
+        const loaded: Array<{ name: string; content: string; size: number }> = [];
+        for (const doc of docs) {
+          try {
+            const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            const content = await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve((reader.result as string).split(",")[1]);
+              reader.readAsDataURL(blob);
+            });
+            loaded.push({ name: doc.name, content, size: doc.fileSize });
+          } catch { /* skip */ }
+        }
+        if (loaded.length) {
+          setUploads(loaded);
+          toast.info(`${loaded.length} supporting document${loaded.length !== 1 ? "s" : ""} loaded from previous generation.`);
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
   const { data: smartsheetEnabled } = useQuery<{ enabled: boolean }>({
     queryKey: ["/api/smartsheet/enabled"],
     queryFn: async () => {

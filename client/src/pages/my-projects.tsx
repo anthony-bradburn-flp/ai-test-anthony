@@ -20,6 +20,10 @@ type StoredDocument = {
   id: string; projectId: string; name: string; filename: string; format: string;
   fileSize: number; generatedAt: string; version: number; versionLabel: string; isLatest: boolean;
 };
+type SupportingDocument = {
+  id: string; projectId: string; name: string; filename: string;
+  fileSize: number; uploadedAt: string;
+};
 type Draft = {
   id: string; userId: string; clientName: string; projectName: string;
   formData: Record<string, unknown>; createdAt: string; updatedAt: string;
@@ -73,6 +77,16 @@ export default function MyProjectsPage() {
     enabled: !!expandedProject,
   });
 
+  const { data: supportingDocs = [] } = useQuery<SupportingDocument[]>({
+    queryKey: ["/api/projects", expandedProject, "supporting-docs"],
+    queryFn: async () => {
+      if (!expandedProject) return [];
+      const res = await fetch(`/api/projects/${expandedProject}/supporting-docs`);
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!expandedProject,
+  });
+
   const { data: drafts = [], refetch: refetchDrafts } = useQuery<Draft[]>({
     queryKey: ["/api/drafts/mine"],
     queryFn: async () => {
@@ -108,6 +122,20 @@ export default function MyProjectsPage() {
   const myProjects = applyFilters(projects.filter((p) => p.createdBy === user?.id));
   const otherProjects = isAdmin ? applyFilters(projects.filter((p) => p.createdBy !== user?.id)) : [];
   const allFiltered = isAdmin ? [...myProjects, ...otherProjects] : myProjects;
+
+  const downloadSupportingDoc = async (doc: SupportingDocument) => {
+    try {
+      const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = doc.name; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Failed to download supporting document");
+    }
+  };
 
   const downloadDoc = async (doc: StoredDocument) => {
     try {
@@ -255,6 +283,26 @@ export default function MyProjectsPage() {
                     </Link>
                   </div>
                 </div>
+                {/* Supporting documents reference section */}
+                {supportingDocs.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-semibold mb-2">Supporting Documents</p>
+                    <div className="flex flex-wrap gap-2">
+                      {supportingDocs.map((doc) => (
+                        <button
+                          key={doc.id}
+                          onClick={() => downloadSupportingDoc(doc)}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium hover:bg-muted transition-colors"
+                          title={`Download ${doc.name} (${(doc.fileSize / 1024).toFixed(0)} KB)`}
+                        >
+                          <Download className="h-3 w-3 shrink-0" />
+                          {doc.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {docs.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
                 ) : (

@@ -115,6 +115,18 @@ export const storedDocumentsTable = pgTable("stored_documents", {
   isLatest: boolean("is_latest").notNull().default(false),
 });
 
+// ---- Supporting Documents ----
+export const supportingDocumentsTable = pgTable("supporting_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projectsTable.id),
+  name: text("name").notNull(),
+  filename: text("filename").notNull(),
+  storagePath: text("storage_path").notNull(),
+  fileSize: integer("file_size").notNull(),
+  uploadedAt: text("uploaded_at").notNull(),
+  uploadedBy: text("uploaded_by").notNull(),
+});
+
 // ---- Drafts ----
 export const draftsTable = pgTable("drafts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -131,6 +143,7 @@ export type AiSettings = typeof aiSettingsTable.$inferSelect;
 export type Client = typeof clientsTable.$inferSelect;
 export type Project = typeof projectsTable.$inferSelect;
 export type StoredDocument = typeof storedDocumentsTable.$inferSelect;
+export type SupportingDocument = typeof supportingDocumentsTable.$inferSelect;
 export type Draft = typeof draftsTable.$inferSelect;
 
 // ---- Generate request schema ----

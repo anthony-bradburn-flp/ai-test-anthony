@@ -1,6 +1,6 @@
 import { eq, and, desc, asc, max } from "drizzle-orm";
-import { type User, type InsertUser, type Client, type Project, type StoredDocument, type Draft } from "@shared/schema";
-import { users, templatesTable, packagesTable, aiSettingsTable, clientsTable, projectsTable, storedDocumentsTable, draftsTable } from "@shared/schema";
+import { type User, type InsertUser, type Client, type Project, type StoredDocument, type SupportingDocument, type Draft } from "@shared/schema";
+import { users, templatesTable, packagesTable, aiSettingsTable, clientsTable, projectsTable, storedDocumentsTable, supportingDocumentsTable, draftsTable } from "@shared/schema";
 import { db } from "./db";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
@@ -9,6 +9,7 @@ import { join } from "path";
 
 export const DATA_DIR = join(process.cwd(), "data");
 export const DOCUMENTS_DIR = join(DATA_DIR, "documents");
+export const SUPPORTING_DOCS_DIR = join(DATA_DIR, "supporting-docs");
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12);
@@ -157,6 +158,11 @@ export interface IStorage {
   deleteDocument(id: string): Promise<StoredDocument | undefined>;
   deleteDocumentsByProject(projectId: string): Promise<void>;
   markDocumentsNotLatest(projectId: string): Promise<void>;
+  // Supporting Documents
+  listSupportingDocs(projectId: string): Promise<SupportingDocument[]>;
+  createSupportingDoc(data: Omit<SupportingDocument, "id">): Promise<SupportingDocument>;
+  getSupportingDoc(id: string): Promise<SupportingDocument | undefined>;
+  deleteSupportingDocsByProject(projectId: string): Promise<SupportingDocument[]>;
   // Drafts
   listDrafts(userId: string): Promise<Draft[]>;
   getDraft(id: string): Promise<Draft | undefined>;
@@ -167,8 +173,9 @@ export interface IStorage {
 
 class DbStorage implements IStorage {
   constructor() {
-    // Ensure documents directory exists
+    // Ensure data directories exist
     if (!existsSync(DOCUMENTS_DIR)) mkdirSync(DOCUMENTS_DIR, { recursive: true });
+    if (!existsSync(SUPPORTING_DOCS_DIR)) mkdirSync(SUPPORTING_DOCS_DIR, { recursive: true });
     // Seed defaults and ensure admin exists (fire-and-forget, idempotent)
     this.init().catch((e) => console.error("[storage] Init error:", e));
   }
@@ -458,6 +465,30 @@ class DbStorage implements IStorage {
     await db.update(storedDocumentsTable)
       .set({ isLatest: false })
       .where(eq(storedDocumentsTable.projectId, projectId));
+  }
+
+  // ---- Supporting Documents ----
+  async listSupportingDocs(projectId: string): Promise<SupportingDocument[]> {
+    return db.select().from(supportingDocumentsTable)
+      .where(eq(supportingDocumentsTable.projectId, projectId))
+      .orderBy(asc(supportingDocumentsTable.uploadedAt));
+  }
+
+  async createSupportingDoc(data: Omit<SupportingDocument, "id">): Promise<SupportingDocument> {
+    const row = { ...data, id: randomUUID() };
+    await db.insert(supportingDocumentsTable).values(row);
+    return row;
+  }
+
+  async getSupportingDoc(id: string): Promise<SupportingDocument | undefined> {
+    const rows = await db.select().from(supportingDocumentsTable).where(eq(supportingDocumentsTable.id, id));
+    return rows[0];
+  }
+
+  async deleteSupportingDocsByProject(projectId: string): Promise<SupportingDocument[]> {
+    return db.delete(supportingDocumentsTable)
+      .where(eq(supportingDocumentsTable.projectId, projectId))
+      .returning();
   }
 
   // ---- Drafts ----
