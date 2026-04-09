@@ -165,37 +165,27 @@ export default function GovernanceStarterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
-  // Pre-load supporting docs when ?projectId= is in the URL (e.g. navigating from My Projects)
+  // Pre-load project data + supporting docs when ?projectId= is in the URL (e.g. from My Projects)
   useEffect(() => {
     if (!isAuthenticated) return;
     const params = new URLSearchParams(window.location.search);
     const projectId = params.get("projectId");
     if (!projectId) return;
-    fetch(`/api/projects/${projectId}/supporting-docs`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then(async (docs: Array<{ id: string; name: string; fileSize: number }>) => {
-        if (!docs.length) return;
-        // Fetch base64 content for each supporting doc and pre-populate the uploads list
-        const loaded: Array<{ name: string; content: string; size: number }> = [];
-        for (const doc of docs) {
-          try {
-            const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
-            if (!res.ok) continue;
-            const blob = await res.blob();
-            const content = await new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve((reader.result as string).split(",")[1]);
-              reader.readAsDataURL(blob);
-            });
-            loaded.push({ name: doc.name, content, size: doc.fileSize });
-          } catch { /* skip */ }
+    (async () => {
+      try {
+        // 1. Fetch and pre-fill the project form fields
+        const projRes = await fetch(`/api/projects/${projectId}`);
+        if (projRes.ok) {
+          const project: Project = await projRes.json();
+          setSelectedClientId(project.clientId);
+          setSelectedProjectId(project.id);
+          setProjectSelectValue(project.id);
+          prefillFromProject(project);
         }
-        if (loaded.length) {
-          setUploads(loaded);
-          toast.info(`${loaded.length} supporting document${loaded.length !== 1 ? "s" : ""} loaded from previous generation.`);
-        }
-      })
-      .catch(() => {});
+        // 2. Load supporting docs into the uploads list
+        await loadSupportingDocs(projectId);
+      } catch { /* ignore */ }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
@@ -384,6 +374,33 @@ export default function GovernanceStarterPage() {
     form.setValue("sponsorIndex", sponsorIdx >= 0 ? sponsorIdx : 0, { shouldValidate: false });
   }, [form]);
 
+  /** Fetch supporting docs for a project and populate the uploads list. */
+  const loadSupportingDocs = useCallback(async (projectId: string) => {
+    try {
+      const r = await fetch(`/api/projects/${projectId}/supporting-docs`);
+      const docs: Array<{ id: string; name: string; fileSize: number }> = r.ok ? await r.json() : [];
+      if (!docs.length) return;
+      const loaded: Array<{ name: string; content: string; size: number }> = [];
+      for (const doc of docs) {
+        try {
+          const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
+          if (!res.ok) continue;
+          const blob = await res.blob();
+          const content = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.readAsDataURL(blob);
+          });
+          loaded.push({ name: doc.name, content, size: doc.fileSize });
+        } catch { /* skip */ }
+      }
+      if (loaded.length) {
+        setUploads(loaded);
+        toast.info(`${loaded.length} supporting document${loaded.length !== 1 ? "s" : ""} loaded.`);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   const onInvalid = () => {
     toast.error("Some required fields are incomplete.", {
       description: "Please scroll through the form — fields highlighted in red need attention before you can generate documents.",
@@ -480,8 +497,10 @@ export default function GovernanceStarterPage() {
               fetch(`/api/drafts/${currentDraftId}`, { method: "DELETE" }).catch(() => {});
               setCurrentDraftId(null);
             }
-            // Break immediately — don't wait for the stream to close (server may still be
-            // running background tasks after res.end(), keeping the socket alive briefly)
+            // Cancel the reader explicitly so the stream is released before we return.
+            // Without this, the reader can stay open while the server finishes background
+            // work, occasionally delaying the React state flush that clears the spinner.
+            try { reader.cancel(); } catch { /* ignore */ }
             return;
           } else if (event.type === "error") {
             throw new Error((event.error as string) ?? "Generation failed");
@@ -787,10 +806,14 @@ export default function GovernanceStarterPage() {
                     value={projectSelectValue}
                     onValueChange={(val) => {
                       setProjectSelectValue(val);
-                      if (val === "__new__") { setSelectedProjectId(""); return; }
+                      if (val === "__new__") { setSelectedProjectId(""); setUploads([]); return; }
                       setSelectedProjectId(val);
                       const p = projects.find((x) => x.id === val);
-                      if (p) prefillFromProject(p);
+                      if (p) {
+                        prefillFromProject(p);
+                        setUploads([]);
+                        loadSupportingDocs(val);
+                      }
                     }}
                     disabled={!selectedClientId}
                   >
