@@ -1,5 +1,4 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { flushSync } from "react-dom";
 import { SiteLogo } from "@/components/page-header";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
@@ -498,18 +497,11 @@ export default function GovernanceStarterPage() {
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
           } else if (event.type === "done") {
-            console.log("[generate] done event received — calling flushSync");
-            try {
-              flushSync(() => {
-                setIsGenerating(false);
-                setGeneratingStage("");
-              });
-            } catch (fsErr) {
-              console.warn("[generate] flushSync threw:", fsErr);
-              setIsGenerating(false);
-              setGeneratingStage("");
-            }
-            console.log("[generate] flushSync complete — isGenerating should be false");
+            // Use setTimeout to schedule state clears in a fresh macrotask.
+            // React 18 automatic batching can defer microtask-based updates
+            // indefinitely when the queue is busy (e.g. React Query refetches),
+            // so flushSync alone is not reliable here.
+            setTimeout(() => { setIsGenerating(false); setGeneratingStage(""); }, 0);
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
             // Clean up draft on successful generation
@@ -518,8 +510,7 @@ export default function GovernanceStarterPage() {
               setCurrentDraftId(null);
             }
             // Explicitly release the stream so the browser doesn't hold the connection
-            // open while server-side background tasks run, which delays the React flush
-            // that clears the spinner.
+            // open while server-side background tasks run.
             reader.cancel().catch(() => {});
             return;
           } else if (event.type === "error") {
@@ -537,14 +528,8 @@ export default function GovernanceStarterPage() {
       }
     } finally {
       generateAbortRef.current = null;
-      console.log("[generate] finally block — clearing isGenerating");
-      try {
-        flushSync(() => { setIsGenerating(false); });
-      } catch (fsErr) {
-        console.warn("[generate] finally flushSync threw:", fsErr);
-        setIsGenerating(false);
-      }
-      console.log("[generate] finally block done");
+      // Guaranteed cleanup in a fresh macrotask so React always flushes.
+      setTimeout(() => { setIsGenerating(false); setGeneratingStage(""); }, 0);
     }
   };
 
