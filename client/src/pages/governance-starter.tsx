@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { SiteLogo } from "@/components/page-header";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
@@ -497,8 +498,10 @@ export default function GovernanceStarterPage() {
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
           } else if (event.type === "done") {
-            setIsGenerating(false);
-            setGeneratingStage("");
+            flushSync(() => {
+              setIsGenerating(false);
+              setGeneratingStage("");
+            });
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
             // Clean up draft on successful generation
