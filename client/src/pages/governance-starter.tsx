@@ -497,11 +497,17 @@ export default function GovernanceStarterPage() {
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
           } else if (event.type === "done") {
-            // Use setTimeout to schedule state clears in a fresh macrotask.
-            // React 18 automatic batching can defer microtask-based updates
-            // indefinitely when the queue is busy (e.g. React Query refetches),
-            // so flushSync alone is not reliable here.
-            setTimeout(() => { setIsGenerating(false); setGeneratingStage(""); }, 0);
+            console.log("[generate] done event received at", new Date().toISOString());
+            // Immediate attempt — works when not inside an ongoing React render.
+            setIsGenerating(false);
+            setGeneratingStage("");
+            // Macrotask fallback — React 18 always flushes state in a fresh macrotask
+            // even when the microtask queue is busy from concurrent React Query work.
+            setTimeout(() => {
+              console.log("[generate] setTimeout fired — forcing isGenerating=false");
+              setIsGenerating(false);
+              setGeneratingStage("");
+            }, 0);
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
             // Clean up draft on successful generation
@@ -528,7 +534,9 @@ export default function GovernanceStarterPage() {
       }
     } finally {
       generateAbortRef.current = null;
-      // Guaranteed cleanup in a fresh macrotask so React always flushes.
+      console.log("[generate] finally block — setting isGenerating=false");
+      setIsGenerating(false);
+      setGeneratingStage("");
       setTimeout(() => { setIsGenerating(false); setGeneratingStage(""); }, 0);
     }
   };
