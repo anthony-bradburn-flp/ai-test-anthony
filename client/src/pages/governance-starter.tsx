@@ -167,9 +167,11 @@ export default function GovernanceStarterPage() {
 
   // Pre-load project data + supporting docs when ?projectId= is in the URL (e.g. from My Projects)
   useEffect(() => {
+    console.log("[projectLoad] effect fired — isAuthenticated:", isAuthenticated, "search:", window.location.search);
     if (!isAuthenticated) return;
     const params = new URLSearchParams(window.location.search);
     const projectId = params.get("projectId");
+    console.log("[projectLoad] projectId from URL:", projectId);
     if (!projectId) return;
     (async () => {
       try {
@@ -184,7 +186,7 @@ export default function GovernanceStarterPage() {
         }
         // 2. Load supporting docs into the uploads list
         await loadSupportingDocs(projectId);
-      } catch { /* ignore */ }
+      } catch (e) { console.warn("[projectLoad] error:", e); }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
@@ -381,7 +383,10 @@ export default function GovernanceStarterPage() {
       if (!r.ok) { console.warn("[supportingDocs] list fetch failed:", r.status); return; }
       const docs: Array<{ id: string; name: string; fileSize: number }> = await r.json();
       console.log("[supportingDocs] found", docs.length, "docs for project", projectId);
-      if (!docs.length) return;
+      if (!docs.length) {
+        toast.info("No supporting documents on record for this project.");
+        return;
+      }
       const loaded: Array<{ name: string; content: string; size: number }> = [];
       for (const doc of docs) {
         try {
@@ -809,10 +814,12 @@ export default function GovernanceStarterPage() {
                   <Select
                     value={projectSelectValue}
                     onValueChange={(val) => {
+                      console.log("[dropdown] project selected:", val);
                       setProjectSelectValue(val);
                       if (val === "__new__") { setSelectedProjectId(""); setUploads([]); return; }
                       setSelectedProjectId(val);
                       const p = projects.find((x) => x.id === val);
+                      console.log("[dropdown] project found in list:", !!p);
                       if (p) {
                         prefillFromProject(p);
                         setUploads([]);
