@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SiteLogo } from "@/components/page-header";
@@ -214,8 +215,15 @@ export default function MyProjectsPage() {
     } finally {
       clearTimeout(timeout);
       clearInterval(elapsedInterval);
-      setTimelinePending(null);
-      setTimelineElapsed(0);
+      try {
+        flushSync(() => {
+          setTimelinePending(null);
+          setTimelineElapsed(0);
+        });
+      } catch {
+        setTimelinePending(null);
+        setTimelineElapsed(0);
+      }
     }
   };
 
