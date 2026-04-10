@@ -529,7 +529,7 @@ export default function GovernanceStarterPage() {
       }
     } finally {
       generateAbortRef.current = null;
-      setIsGenerating(false);
+      flushSync(() => { setIsGenerating(false); });
     }
   };
 
