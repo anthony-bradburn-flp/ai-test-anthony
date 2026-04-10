@@ -498,10 +498,18 @@ export default function GovernanceStarterPage() {
             setGeneratingStage(`Built document ${docsReceived} of ${totalExpected} — ready to download`);
             setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
           } else if (event.type === "done") {
-            flushSync(() => {
+            console.log("[generate] done event received — calling flushSync");
+            try {
+              flushSync(() => {
+                setIsGenerating(false);
+                setGeneratingStage("");
+              });
+            } catch (fsErr) {
+              console.warn("[generate] flushSync threw:", fsErr);
               setIsGenerating(false);
               setGeneratingStage("");
-            });
+            }
+            console.log("[generate] flushSync complete — isGenerating should be false");
             if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
             // Clean up draft on successful generation
@@ -529,7 +537,14 @@ export default function GovernanceStarterPage() {
       }
     } finally {
       generateAbortRef.current = null;
-      flushSync(() => { setIsGenerating(false); });
+      console.log("[generate] finally block — clearing isGenerating");
+      try {
+        flushSync(() => { setIsGenerating(false); });
+      } catch (fsErr) {
+        console.warn("[generate] finally flushSync threw:", fsErr);
+        setIsGenerating(false);
+      }
+      console.log("[generate] finally block done");
     }
   };
 

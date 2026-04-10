@@ -765,6 +765,7 @@ export async function registerRoutes(
       if (err.code !== "ERR_STREAM_WRITE_AFTER_END") console.error("[generate] response stream error:", err);
     });
     res.setTimeout(180_000, () => {
+      console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — writableEnded: ${res.writableEnded}`);
       if (!res.writableEnded) {
         if (!res.headersSent) {
           res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
