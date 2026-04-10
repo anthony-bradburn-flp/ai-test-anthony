@@ -214,8 +214,9 @@ export default function MyProjectsPage() {
     } finally {
       clearTimeout(timeout);
       clearInterval(elapsedInterval);
-      setTimelinePending(null);
-      setTimelineElapsed(0);
+      // Use setTimeout to clear state in a fresh macrotask so React 18
+      // automatic batching doesn't defer the flush indefinitely.
+      setTimeout(() => { setTimelinePending(null); setTimelineElapsed(0); }, 0);
     }
   };
 
