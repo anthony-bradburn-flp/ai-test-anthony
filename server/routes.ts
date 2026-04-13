@@ -540,6 +540,25 @@ export async function registerRoutes(
     res.json(await storage.listProjects(undefined, createdBy));
   });
 
+  // Check whether a sheet reference is already in use — returns details only if the
+  // requester owns the project (or is admin/manager). Must be defined before /:id.
+  app.get("/api/projects/check-ref", requireAuth, async (req, res) => {
+    const ref = (req.query.ref as string)?.trim();
+    if (!ref) return res.json({ conflict: null });
+    const match = await storage.findProjectBySheetRef(ref);
+    if (!match) return res.json({ conflict: null });
+    const session = req.session as { userId?: string; role?: string };
+    const canAccess = match.createdBy === session.userId
+      || session.role === "admin"
+      || session.role === "manager";
+    if (canAccess) {
+      res.json({ conflict: { isOwn: true, id: match.id, projectName: match.projectName, sheetRef: match.sheetRef, clientName: match.clientName, clientId: match.clientId } });
+    } else {
+      // Ref is in use but the requester can't see who owns it
+      res.json({ conflict: { isOwn: false, sheetRef: match.sheetRef } });
+    }
+  });
+
   app.get("/api/projects/:id", requireAuth, async (req, res) => {
     const project = await storage.getProject(req.params.id);
     if (!project) return res.status(404).json({ message: "Not found" });

@@ -133,8 +133,10 @@ export default function GovernanceStarterPage() {
   const [showNewClientInput, setShowNewClientInput] = useState(false);
   const [versionModal, setVersionModal] = useState<{ open: boolean; onConfirm: (mode: "replace" | "new") => void } | null>(null);
   const [sheetRefModal, setSheetRefModal] = useState<{
-    existingProject: { id: string; projectName: string; sheetRef: string; clientName: string; clientId: string };
-    onUseExisting: () => void;
+    conflict:
+      | { isOwn: true; id: string; projectName: string; sheetRef: string; clientName: string; clientId: string }
+      | { isOwn: false; sheetRef: string };
+    onUseExisting?: () => void;  // only present when isOwn
     onCreateNew: () => void;
     onCancel: () => void;
   } | null>(null);
@@ -571,25 +573,25 @@ export default function GovernanceStarterPage() {
       clientStakeholders: values.clientStakeholders,
     };
     if (!projectId && clientId) {
-      // Check if sheetRef is already used by another project
+      // Check if sheetRef is already used — server returns only the details the
+      // current user is allowed to see (own projects / admin sees all; others
+      // see only that a conflict exists, not whose project it is).
       if (values.sheetRef?.trim()) {
-        const allRes = await fetch("/api/projects?mine=true");
-        const allProjects: Project[] = allRes.ok ? await allRes.json() : [];
-        const conflict = allProjects.find(
-          (p) => p.sheetRef?.trim().toLowerCase() === values.sheetRef.trim().toLowerCase()
-        );
+        const checkRes = await fetch(`/api/projects/check-ref?ref=${encodeURIComponent(values.sheetRef.trim())}`);
+        const { conflict } = checkRes.ok ? await checkRes.json() : { conflict: null };
         if (conflict) {
           const decision = await new Promise<"use-existing" | "create-new" | "cancel">((resolve) => {
             setSheetRefModal({
-              existingProject: { id: conflict.id, projectName: conflict.projectName, sheetRef: conflict.sheetRef, clientName: conflict.clientName, clientId: conflict.clientId },
-              onUseExisting: () => { setSheetRefModal(null); resolve("use-existing"); },
-              onCreateNew:   () => { setSheetRefModal(null); resolve("create-new"); },
-              onCancel:      () => { setSheetRefModal(null); resolve("cancel"); },
+              conflict,
+              onUseExisting: conflict.isOwn
+                ? () => { setSheetRefModal(null); resolve("use-existing"); }
+                : undefined,
+              onCreateNew: () => { setSheetRefModal(null); resolve("create-new"); },
+              onCancel:    () => { setSheetRefModal(null); resolve("cancel"); },
             });
           });
           if (decision === "cancel") return;
-          if (decision === "use-existing") {
-            // Re-use the existing project, updating it with current form values
+          if (decision === "use-existing" && conflict.isOwn) {
             projectId = conflict.id;
             setSelectedProjectId(conflict.id);
             await fetch(`/api/projects/${conflict.id}`, {
@@ -599,7 +601,7 @@ export default function GovernanceStarterPage() {
             });
             queryClient.invalidateQueries({ queryKey: ["/api/projects", conflict.clientId] });
           }
-          // "create-new" falls through to the creation block below
+          // "create-new" falls through to creation below
         }
       }
 
@@ -1743,17 +1745,27 @@ export default function GovernanceStarterPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-card rounded-xl border border-border shadow-xl p-6 max-w-sm w-full mx-4">
             <h2 className="text-lg font-bold mb-2">Sheet reference already in use</h2>
-            <p className="text-sm text-muted-foreground mb-1">
-              The reference <span className="font-mono font-semibold text-foreground">{sheetRefModal.existingProject.sheetRef}</span> is already used by an existing project:
-            </p>
-            <p className="text-sm font-semibold mb-1">{sheetRefModal.existingProject.projectName}</p>
-            <p className="text-xs text-muted-foreground mb-6">Client: {sheetRefModal.existingProject.clientName}</p>
+            {sheetRefModal.conflict.isOwn ? (
+              <>
+                <p className="text-sm text-muted-foreground mb-1">
+                  The reference <span className="font-mono font-semibold text-foreground">{sheetRefModal.conflict.sheetRef}</span> is already used by one of your projects:
+                </p>
+                <p className="text-sm font-semibold mb-1">{sheetRefModal.conflict.projectName}</p>
+                <p className="text-xs text-muted-foreground mb-6">Client: {sheetRefModal.conflict.clientName}</p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground mb-6">
+                The reference <span className="font-mono font-semibold text-foreground">{sheetRefModal.conflict.sheetRef}</span> is already in use by another project you don't have access to. You can still create a new project with this reference.
+              </p>
+            )}
             <div className="grid gap-3">
-              <Button className="w-full font-bold" onClick={sheetRefModal.onUseExisting}>
-                Load &amp; update existing project
-                <span className="ml-2 text-xs font-normal opacity-70">— generates against the existing project</span>
-              </Button>
-              <Button variant="outline" className="w-full font-bold" onClick={sheetRefModal.onCreateNew}>
+              {sheetRefModal.onUseExisting && (
+                <Button className="w-full font-bold" onClick={sheetRefModal.onUseExisting}>
+                  Load &amp; update existing project
+                  <span className="ml-2 text-xs font-normal opacity-70">— generates against the existing project</span>
+                </Button>
+              )}
+              <Button variant={sheetRefModal.onUseExisting ? "outline" : "default"} className="w-full font-bold" onClick={sheetRefModal.onCreateNew}>
                 Create new project anyway
                 <span className="ml-2 text-xs font-normal opacity-70">— creates a duplicate with this ref</span>
               </Button>
