@@ -162,6 +162,7 @@ export interface IStorage {
   listSupportingDocs(projectId: string): Promise<SupportingDocument[]>;
   createSupportingDoc(data: Omit<SupportingDocument, "id">): Promise<SupportingDocument>;
   getSupportingDoc(id: string): Promise<SupportingDocument | undefined>;
+  deleteSupportingDoc(id: string): Promise<SupportingDocument | undefined>;
   deleteSupportingDocsByProject(projectId: string): Promise<SupportingDocument[]>;
   // Drafts
   listDrafts(userId: string): Promise<Draft[]>;
@@ -482,6 +483,13 @@ class DbStorage implements IStorage {
 
   async getSupportingDoc(id: string): Promise<SupportingDocument | undefined> {
     const rows = await db.select().from(supportingDocumentsTable).where(eq(supportingDocumentsTable.id, id));
+    return rows[0];
+  }
+
+  async deleteSupportingDoc(id: string): Promise<SupportingDocument | undefined> {
+    const rows = await db.delete(supportingDocumentsTable)
+      .where(eq(supportingDocumentsTable.id, id))
+      .returning();
     return rows[0];
   }
 
