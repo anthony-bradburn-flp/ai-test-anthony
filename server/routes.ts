@@ -660,6 +660,23 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // DELETE /api/projects/:id/documents?version=X  — delete all docs for a project (or just one version)
+  app.delete("/api/projects/:id/documents", requireAuth, async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Not found" });
+    const session = req.session as { userId?: string; role?: string };
+    if (session.role !== "admin" && project.createdBy !== session.userId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+    const version = req.query.version ? parseInt(req.query.version as string, 10) : undefined;
+    if (version !== undefined && !isNaN(version)) {
+      await storage.deleteDocumentsByVersion(req.params.id, version);
+    } else {
+      await storage.deleteDocumentsByProject(req.params.id);
+    }
+    res.json({ ok: true });
+  });
+
   // --- Drafts ---
 
   app.get("/api/drafts/mine", requireAuth, async (req, res) => {

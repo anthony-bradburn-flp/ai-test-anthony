@@ -641,6 +641,7 @@ export default function AdminPage() {
   const [expandedAdminProject, setExpandedAdminProject] = useState<string | null>(null);
   const [deletingAdminDoc, setDeletingAdminDoc] = useState<string | null>(null);
   const [deletingAdminSupportingDoc, setDeletingAdminSupportingDoc] = useState<string | null>(null);
+  const [deletingAdminBulkDocs, setDeletingAdminBulkDocs] = useState<{ projectId: string; version?: number } | null>(null);
   const [viewFormProject, setViewFormProject] = useState<FullProject | null>(null);
 
   const { data: clientsData = [], isLoading: clientsLoading } = useQuery<AdminClient[]>({
@@ -783,6 +784,25 @@ export default function AdminPage() {
       toast.error("Failed to delete document");
     } finally {
       setDeletingAdminDoc(null);
+    }
+  };
+
+  const deleteAdminBulkDocs = async (projectId: string, version?: number) => {
+    const label = version !== undefined ? `all v${version} documents` : "all documents";
+    if (!confirm(`Delete ${label} for this project? This cannot be undone.`)) return;
+    setDeletingAdminBulkDocs({ projectId, version });
+    try {
+      const url = version !== undefined
+        ? `/api/projects/${projectId}/documents?version=${version}`
+        : `/api/projects/${projectId}/documents`;
+      const res = await fetch(url, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "documents"] });
+      toast.success(version !== undefined ? `Deleted all v${version} documents` : "Deleted all documents");
+    } catch {
+      toast.error("Failed to delete documents");
+    } finally {
+      setDeletingAdminBulkDocs(null);
     }
   };
 
@@ -1640,33 +1660,67 @@ export default function AdminPage() {
                                   </div>
                                   {/* Generated Documents */}
                                   <div>
-                                    <p className="text-sm font-semibold mb-2">Generated Documents</p>
+                                    <div className="flex items-center justify-between mb-2">
+                                      <p className="text-sm font-semibold">Generated Documents</p>
+                                      {adminExpandedDocs.length > 0 && (
+                                        <button
+                                          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
+                                          disabled={!!deletingAdminBulkDocs}
+                                          onClick={() => deleteAdminBulkDocs(expandedAdminProject!)}
+                                          title="Delete all documents"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                          {deletingAdminBulkDocs?.projectId === expandedAdminProject && !deletingAdminBulkDocs.version ? "Deleting…" : "Delete All"}
+                                        </button>
+                                      )}
+                                    </div>
                                     {adminExpandedDocs.length === 0 ? (
                                       <p className="text-sm text-muted-foreground">No documents stored for this project.</p>
-                                    ) : (
-                                      <div className="flex flex-wrap gap-2">
-                                        {adminExpandedDocs.map((doc) => (
-                                          <div key={doc.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background text-xs font-medium">
-                                            <button
-                                              onClick={() => downloadAdminDoc(doc)}
-                                              className={`flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted transition-colors rounded-l-md ${doc.isLatest ? "font-bold" : ""}`}
-                                              title={`Download ${doc.name} v${doc.version}`}
-                                            >
-                                              <Download className="h-3 w-3 shrink-0" />
-                                              {doc.name} v{doc.version}
-                                            </button>
-                                            <button
-                                              onClick={() => deleteAdminDoc(doc)}
-                                              disabled={deletingAdminDoc === doc.id}
-                                              className="flex items-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive hover:bg-muted transition-colors rounded-r-md border-l border-border"
-                                              title={`Delete ${doc.name} v${doc.version}`}
-                                            >
-                                              <Trash2 className="h-3 w-3" />
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
+                                    ) : (() => {
+                                      const adminVersions = Array.from(new Set(adminExpandedDocs.map((d) => d.version))).sort((a, b) => a - b);
+                                      return (
+                                        <div className="space-y-2">
+                                          {adminVersions.map((v) => (
+                                            <div key={v}>
+                                              <div className="flex items-center gap-2 mb-1">
+                                                <span className="text-xs font-semibold text-muted-foreground">v{v}</span>
+                                                <button
+                                                  className="flex items-center gap-0.5 text-xs text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
+                                                  disabled={!!deletingAdminBulkDocs}
+                                                  onClick={() => deleteAdminBulkDocs(expandedAdminProject!, v)}
+                                                  title={`Delete all v${v} documents`}
+                                                >
+                                                  <Trash2 className="h-2.5 w-2.5" />
+                                                  Delete v{v}
+                                                </button>
+                                              </div>
+                                              <div className="flex flex-wrap gap-2">
+                                                {adminExpandedDocs.filter((d) => d.version === v).map((doc) => (
+                                                  <div key={doc.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background text-xs font-medium">
+                                                    <button
+                                                      onClick={() => downloadAdminDoc(doc)}
+                                                      className={`flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted transition-colors rounded-l-md ${doc.isLatest ? "font-bold" : ""}`}
+                                                      title={`Download ${doc.name} v${v}`}
+                                                    >
+                                                      <Download className="h-3 w-3 shrink-0" />
+                                                      {doc.name}
+                                                    </button>
+                                                    <button
+                                                      onClick={() => deleteAdminDoc(doc)}
+                                                      disabled={deletingAdminDoc === doc.id}
+                                                      className="flex items-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive hover:bg-muted transition-colors rounded-r-md border-l border-border"
+                                                      title={`Delete ${doc.name} v${v}`}
+                                                    >
+                                                      <Trash2 className="h-3 w-3" />
+                                                    </button>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                 </div>
                               </TableCell>

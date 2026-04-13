@@ -50,6 +50,7 @@ export default function MyProjectsPage() {
   const [deletingDraft, setDeletingDraft] = useState<string | null>(null);
   const [deletingSupportingDoc, setDeletingSupportingDoc] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [deletingBulkDocs, setDeletingBulkDocs] = useState<{ projectId: string; version?: number } | null>(null);
   const [viewFormProject, setViewFormProject] = useState<FullProject | null>(null);
 
   // Pagination state
@@ -224,6 +225,25 @@ export default function MyProjectsPage() {
     }
   };
 
+  const deleteBulkDocs = async (projectId: string, version?: number) => {
+    const label = version !== undefined ? `all v${version} documents` : "all documents";
+    if (!confirm(`Delete ${label} for this project? This cannot be undone.`)) return;
+    setDeletingBulkDocs({ projectId, version });
+    try {
+      const url = version !== undefined
+        ? `/api/projects/${projectId}/documents?version=${version}`
+        : `/api/projects/${projectId}/documents`;
+      const res = await fetch(url, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "documents"] });
+      toast.success(version !== undefined ? `Deleted all v${version} documents` : "Deleted all documents");
+    } catch {
+      toast.error("Failed to delete documents");
+    } finally {
+      setDeletingBulkDocs(null);
+    }
+  };
+
   const generateTimeline = async (project: Project, mode: "update" | "new" = project.smartsheetId ? "update" : "new") => {
     setTimelinePending(project.id);
     setTimelineElapsed(0);
@@ -384,12 +404,40 @@ export default function MyProjectsPage() {
                   <p className="text-sm text-muted-foreground">No documents stored yet. Use <strong>Generate Documents</strong> to create them.</p>
                 ) : (
                   <div className="overflow-x-auto">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-semibold">Generated Documents</p>
+                      {(isAdmin || project.createdBy === user?.id) && (
+                        <Button
+                          size="sm" variant="ghost"
+                          className="h-7 text-xs text-muted-foreground hover:text-destructive"
+                          disabled={!!deletingBulkDocs}
+                          onClick={() => deleteBulkDocs(project.id)}
+                        >
+                          <Trash2 className="h-3 w-3 mr-1" />
+                          {deletingBulkDocs?.projectId === project.id && !deletingBulkDocs.version ? "Deleting…" : "Delete All"}
+                        </Button>
+                      )}
+                    </div>
                     <table className="text-sm w-full">
                       <thead>
                         <tr className="border-b border-border">
                           <th className="text-left py-2 pr-4 font-semibold sticky left-0 bg-card z-10">Document</th>
                           {versions.map((v) => (
-                            <th key={v} className="text-center py-2 px-2 font-semibold">v{v}</th>
+                            <th key={v} className="text-center py-2 px-2 font-semibold">
+                              <div className="flex items-center justify-center gap-1">
+                                <span>v{v}</span>
+                                {(isAdmin || project.createdBy === user?.id) && (
+                                  <button
+                                    className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
+                                    disabled={!!deletingBulkDocs}
+                                    onClick={() => deleteBulkDocs(project.id, v)}
+                                    title={`Delete all v${v} documents`}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </th>
                           ))}
                         </tr>
                       </thead>
