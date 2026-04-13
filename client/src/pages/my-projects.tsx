@@ -250,14 +250,20 @@ export default function MyProjectsPage() {
         ) as any,
       });
     } catch (err: any) {
-      const msg = err?.name === "AbortError" ? "Timed out after 5 minutes — the sheet may still be processing in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
+      const msg = err?.name === "AbortError" ? "Timed out — the sheet may still be processing in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
       setTimelineError((prev) => ({ ...prev, [project.id]: msg }));
     } finally {
       clearTimeout(timeout);
       clearInterval(elapsedInterval);
-      // Use setTimeout to clear state in a fresh macrotask so React 18
-      // automatic batching doesn't defer the flush indefinitely.
-      setTimeout(() => { setTimelinePending(null); setTimelineElapsed(0); }, 0);
+      console.log("[timeline] finally — clearing timelinePending");
+      // Immediate attempt + macrotask fallback to ensure React flushes the update.
+      setTimelinePending(null);
+      setTimelineElapsed(0);
+      setTimeout(() => {
+        console.log("[timeline] setTimeout fired — forcing timelinePending=null");
+        setTimelinePending(null);
+        setTimelineElapsed(0);
+      }, 0);
     }
   };
 
