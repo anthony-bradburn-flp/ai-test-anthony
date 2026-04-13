@@ -132,6 +132,14 @@ export default function GovernanceStarterPage() {
   const [newClientName, setNewClientName] = useState("");
   const [showNewClientInput, setShowNewClientInput] = useState(false);
   const [versionModal, setVersionModal] = useState<{ open: boolean; onConfirm: (mode: "replace" | "new") => void } | null>(null);
+  const [sheetRefModal, setSheetRefModal] = useState<{
+    conflict:
+      | { isOwn: true; id: string; projectName: string; sheetRef: string; clientName: string; clientId: string }
+      | { isOwn: false; sheetRef: string };
+    onUseExisting?: () => void;  // only present when isOwn
+    onCreateNew: () => void;
+    onCancel: () => void;
+  } | null>(null);
   const [generateTimeline, setGenerateTimeline] = useState(false);
   const [timelineSheetUrl, setTimelineSheetUrl] = useState<string | null>(null);
   const [projectSelectValue, setProjectSelectValue] = useState<string>("");
@@ -565,17 +573,51 @@ export default function GovernanceStarterPage() {
       clientStakeholders: values.clientStakeholders,
     };
     if (!projectId && clientId) {
-      // New project — create it
-      const res = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(projectPayload),
-      });
-      if (res.ok) {
-        const project = await res.json();
-        projectId = project.id;
-        setSelectedProjectId(project.id);
-        queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
+      // Check if sheetRef is already used — server returns only the details the
+      // current user is allowed to see (own projects / admin sees all; others
+      // see only that a conflict exists, not whose project it is).
+      if (values.sheetRef?.trim()) {
+        const checkRes = await fetch(`/api/projects/check-ref?ref=${encodeURIComponent(values.sheetRef.trim())}`);
+        const { conflict } = checkRes.ok ? await checkRes.json() : { conflict: null };
+        if (conflict) {
+          const decision = await new Promise<"use-existing" | "create-new" | "cancel">((resolve) => {
+            setSheetRefModal({
+              conflict,
+              onUseExisting: conflict.isOwn
+                ? () => { setSheetRefModal(null); resolve("use-existing"); }
+                : undefined,
+              onCreateNew: () => { setSheetRefModal(null); resolve("create-new"); },
+              onCancel:    () => { setSheetRefModal(null); resolve("cancel"); },
+            });
+          });
+          if (decision === "cancel") return;
+          if (decision === "use-existing" && conflict.isOwn) {
+            projectId = conflict.id;
+            setSelectedProjectId(conflict.id);
+            await fetch(`/api/projects/${conflict.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(projectPayload),
+            });
+            queryClient.invalidateQueries({ queryKey: ["/api/projects", conflict.clientId] });
+          }
+          // "create-new" falls through to creation below
+        }
+      }
+
+      if (!projectId) {
+        // New project — create it
+        const res = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(projectPayload),
+        });
+        if (res.ok) {
+          const project = await res.json();
+          projectId = project.id;
+          setSelectedProjectId(project.id);
+          queryClient.invalidateQueries({ queryKey: ["/api/projects", clientId] });
+        }
       }
     } else if (projectId) {
       // Existing project — update with latest form values so DB stays in sync
@@ -1697,6 +1739,41 @@ export default function GovernanceStarterPage() {
         )}
 
       </main>
+
+      {/* Sheet reference conflict modal */}
+      {sheetRefModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card rounded-xl border border-border shadow-xl p-6 max-w-sm w-full mx-4">
+            <h2 className="text-lg font-bold mb-2">Sheet reference already in use</h2>
+            {sheetRefModal.conflict.isOwn ? (
+              <>
+                <p className="text-sm text-muted-foreground mb-1">
+                  The reference <span className="font-mono font-semibold text-foreground">{sheetRefModal.conflict.sheetRef}</span> is already used by one of your projects:
+                </p>
+                <p className="text-sm font-semibold mb-1">{sheetRefModal.conflict.projectName}</p>
+                <p className="text-xs text-muted-foreground mb-6">Client: {sheetRefModal.conflict.clientName}</p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground mb-6">
+                The reference <span className="font-mono font-semibold text-foreground">{sheetRefModal.conflict.sheetRef}</span> is already in use by another project you don't have access to. You can still create a new project with this reference.
+              </p>
+            )}
+            <div className="grid gap-3">
+              {sheetRefModal.onUseExisting && (
+                <Button className="w-full font-bold" onClick={sheetRefModal.onUseExisting}>
+                  Load &amp; update existing project
+                  <span className="ml-2 text-xs font-normal opacity-70">— generates against the existing project</span>
+                </Button>
+              )}
+              <Button variant={sheetRefModal.onUseExisting ? "outline" : "default"} className="w-full font-bold" onClick={sheetRefModal.onCreateNew}>
+                Create new project anyway
+                <span className="ml-2 text-xs font-normal opacity-70">— creates a duplicate with this ref</span>
+              </Button>
+              <Button variant="ghost" className="w-full" onClick={sheetRefModal.onCancel}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Version modal */}
       {versionModal?.open && (
