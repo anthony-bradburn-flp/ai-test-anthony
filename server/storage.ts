@@ -158,6 +158,7 @@ export interface IStorage {
   createDocument(data: Omit<StoredDocument, "id">): Promise<StoredDocument>;
   deleteDocument(id: string): Promise<StoredDocument | undefined>;
   deleteDocumentsByProject(projectId: string): Promise<void>;
+  deleteDocumentsByVersion(projectId: string, version: number): Promise<void>;
   markDocumentsNotLatest(projectId: string): Promise<void>;
   // Supporting Documents
   listSupportingDocs(projectId: string): Promise<SupportingDocument[]>;
@@ -467,6 +468,17 @@ class DbStorage implements IStorage {
       try { if (existsSync(fullPath)) unlinkSync(fullPath); } catch { /* ignore */ }
     }
     await db.delete(storedDocumentsTable).where(eq(storedDocumentsTable.projectId, projectId));
+  }
+
+  async deleteDocumentsByVersion(projectId: string, version: number): Promise<void> {
+    const docs = await db.select().from(storedDocumentsTable)
+      .where(and(eq(storedDocumentsTable.projectId, projectId), eq(storedDocumentsTable.version, version)));
+    for (const doc of docs) {
+      const fullPath = join(DATA_DIR, doc.storagePath);
+      try { if (existsSync(fullPath)) unlinkSync(fullPath); } catch { /* ignore */ }
+    }
+    await db.delete(storedDocumentsTable)
+      .where(and(eq(storedDocumentsTable.projectId, projectId), eq(storedDocumentsTable.version, version)));
   }
 
   async markDocumentsNotLatest(projectId: string): Promise<void> {
