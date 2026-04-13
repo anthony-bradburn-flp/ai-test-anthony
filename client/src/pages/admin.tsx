@@ -3,6 +3,7 @@ import { SiteLogo } from "@/components/page-header";
 import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
+import { ProjectFormView, type FullProject } from "@/components/project-form-view";
 import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound, ExternalLink } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -619,8 +620,18 @@ export default function AdminPage() {
 
   // Clients tab state
   type AdminClient = { id: string; name: string; createdAt: string; createdBy: string };
-  type AdminProject = { id: string; clientId: string; clientName: string; sheetRef: string; projectName: string; projectType: string; createdAt: string; lastGeneratedAt?: string; createdBy: string; smartsheetUrl?: string | null };
+  type AdminProject = {
+    id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
+    projectType: string; projectSize?: string | null; value?: string | null;
+    startDate?: string | null; endDate?: string | null; summary?: string | null;
+    sponsorName?: string | null; sponsorRole?: string | null;
+    billingMilestones?: Array<{ stage: string; percentage: number; value?: string | null; date?: string | null }> | null;
+    flipsideStakeholders?: Array<{ name: string; role: string }> | null;
+    clientStakeholders?: Array<{ name: string; role: string }> | null;
+    createdAt: string; lastGeneratedAt?: string; createdBy: string; smartsheetUrl?: string | null;
+  };
   type AdminStoredDoc = { id: string; projectId: string; name: string; filename: string; format: string; fileSize: number; generatedAt: string; version: number; versionLabel: string; isLatest: boolean };
+  type AdminSupportingDoc = { id: string; projectId: string; name: string; filename: string; fileSize: number; uploadedAt: string };
 
   const [showAddClient, setShowAddClient] = useState(false);
   const [newClientName, setNewClientName] = useState("");
@@ -628,6 +639,9 @@ export default function AdminPage() {
   const [editClientName, setEditClientName] = useState("");
   const [projectClientFilter, setProjectClientFilter] = useState("__all__");
   const [expandedAdminProject, setExpandedAdminProject] = useState<string | null>(null);
+  const [deletingAdminDoc, setDeletingAdminDoc] = useState<string | null>(null);
+  const [deletingAdminSupportingDoc, setDeletingAdminSupportingDoc] = useState<string | null>(null);
+  const [viewFormProject, setViewFormProject] = useState<FullProject | null>(null);
 
   const { data: clientsData = [], isLoading: clientsLoading } = useQuery<AdminClient[]>({
     queryKey: ["/api/clients"],
@@ -650,6 +664,16 @@ export default function AdminPage() {
     queryFn: async () => {
       if (!expandedAdminProject) return [];
       const res = await fetch(`/api/projects/${expandedAdminProject}/documents`);
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!expandedAdminProject,
+  });
+
+  const { data: adminExpandedSupportingDocs = [] } = useQuery<AdminSupportingDoc[]>({
+    queryKey: ["/api/projects", expandedAdminProject, "supporting-docs"],
+    queryFn: async () => {
+      if (!expandedAdminProject) return [];
+      const res = await fetch(`/api/projects/${expandedAdminProject}/supporting-docs`);
       return res.ok ? res.json() : [];
     },
     enabled: !!expandedAdminProject,
@@ -730,6 +754,50 @@ export default function AdminPage() {
       URL.revokeObjectURL(url);
     } catch {
       toast.error("Failed to download document");
+    }
+  };
+
+  const downloadAdminSupportingDoc = async (doc: AdminSupportingDoc) => {
+    try {
+      const res = await fetch(`/api/supporting-docs/${doc.id}/download`);
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = doc.name; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Failed to download supporting document");
+    }
+  };
+
+  const deleteAdminDoc = async (doc: AdminStoredDoc) => {
+    if (!confirm(`Delete "${doc.name}" (${doc.versionLabel})?`)) return;
+    setDeletingAdminDoc(doc.id);
+    try {
+      const res = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", expandedAdminProject, "documents"] });
+      toast.success(`Deleted ${doc.name} (${doc.versionLabel})`);
+    } catch {
+      toast.error("Failed to delete document");
+    } finally {
+      setDeletingAdminDoc(null);
+    }
+  };
+
+  const deleteAdminSupportingDoc = async (doc: AdminSupportingDoc) => {
+    if (!confirm(`Delete supporting document "${doc.name}"?`)) return;
+    setDeletingAdminSupportingDoc(doc.id);
+    try {
+      const res = await fetch(`/api/supporting-documents/${doc.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", expandedAdminProject, "supporting-docs"] });
+      toast.success(`Deleted ${doc.name}`);
+    } catch {
+      toast.error("Failed to delete supporting document");
+    } finally {
+      setDeletingAdminSupportingDoc(null);
     }
   };
 
@@ -1515,6 +1583,9 @@ export default function AdminPage() {
                             </TableCell>
                             <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end gap-1">
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title="View submitted form" onClick={() => setViewFormProject(project)}>
+                                  <Eye className="h-4 w-4" />
+                                </Button>
                                 {project.smartsheetUrl && (
                                   <a href={project.smartsheetUrl} target="_blank" rel="noopener noreferrer">
                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title="View Smartsheet timeline">
@@ -1524,8 +1595,9 @@ export default function AdminPage() {
                                 )}
                                 <Button
                                   variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                  onClick={() => { if (confirm(`Delete project "${project.projectName}" and all its stored documents?`)) deleteProjectMutation.mutate(project.id); }}
+                                  onClick={() => { if (confirm(`Delete project "${project.projectName}" and all its documents? This cannot be undone.`)) deleteProjectMutation.mutate(project.id); }}
                                   disabled={deleteProjectMutation.isPending}
+                                  title="Delete project"
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -1535,26 +1607,67 @@ export default function AdminPage() {
                           {isExpanded && (
                             <TableRow key={`${project.id}-docs`}>
                               <TableCell colSpan={8} className="p-0 bg-muted/30">
-                                <div className="p-4">
-                                  <p className="text-sm font-semibold mb-2">Stored Documents</p>
-                                  {adminExpandedDocs.length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">No documents stored for this project.</p>
-                                  ) : (
-                                    <div className="flex flex-wrap gap-2">
-                                      {adminExpandedDocs.map((doc) => (
-                                        <Button
-                                          key={doc.id}
-                                          size="sm"
-                                          variant={doc.isLatest ? "default" : "outline"}
-                                          className="h-7 text-xs font-semibold"
-                                          onClick={() => downloadAdminDoc(doc)}
-                                        >
-                                          <Download className="h-3 w-3 mr-1" />
-                                          {doc.name} v{doc.version}
-                                        </Button>
-                                      ))}
-                                    </div>
-                                  )}
+                                <div className="p-4 space-y-4">
+                                  {/* Supporting Documents */}
+                                  <div>
+                                    <p className="text-sm font-semibold mb-2">Supporting Documents</p>
+                                    {adminExpandedSupportingDocs.length === 0 ? (
+                                      <p className="text-sm text-muted-foreground">No supporting documents uploaded.</p>
+                                    ) : (
+                                      <div className="flex flex-wrap gap-2">
+                                        {adminExpandedSupportingDocs.map((doc) => (
+                                          <div key={doc.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background text-xs font-medium">
+                                            <button
+                                              onClick={() => downloadAdminSupportingDoc(doc)}
+                                              className="flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted transition-colors rounded-l-md"
+                                              title={`Download ${doc.name} (${(doc.fileSize / 1024).toFixed(0)} KB)`}
+                                            >
+                                              <Download className="h-3 w-3 shrink-0" />
+                                              {doc.name}
+                                            </button>
+                                            <button
+                                              onClick={() => deleteAdminSupportingDoc(doc)}
+                                              disabled={deletingAdminSupportingDoc === doc.id}
+                                              className="flex items-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive hover:bg-muted transition-colors rounded-r-md border-l border-border"
+                                              title={`Delete ${doc.name}`}
+                                            >
+                                              <Trash2 className="h-3 w-3" />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  {/* Generated Documents */}
+                                  <div>
+                                    <p className="text-sm font-semibold mb-2">Generated Documents</p>
+                                    {adminExpandedDocs.length === 0 ? (
+                                      <p className="text-sm text-muted-foreground">No documents stored for this project.</p>
+                                    ) : (
+                                      <div className="flex flex-wrap gap-2">
+                                        {adminExpandedDocs.map((doc) => (
+                                          <div key={doc.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background text-xs font-medium">
+                                            <button
+                                              onClick={() => downloadAdminDoc(doc)}
+                                              className={`flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted transition-colors rounded-l-md ${doc.isLatest ? "font-bold" : ""}`}
+                                              title={`Download ${doc.name} v${doc.version}`}
+                                            >
+                                              <Download className="h-3 w-3 shrink-0" />
+                                              {doc.name} v{doc.version}
+                                            </button>
+                                            <button
+                                              onClick={() => deleteAdminDoc(doc)}
+                                              disabled={deletingAdminDoc === doc.id}
+                                              className="flex items-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive hover:bg-muted transition-colors rounded-r-md border-l border-border"
+                                              title={`Delete ${doc.name} v${doc.version}`}
+                                            >
+                                              <Trash2 className="h-3 w-3" />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               </TableCell>
                             </TableRow>
@@ -1783,6 +1896,7 @@ export default function AdminPage() {
           </TabsContent>
         </Tabs>
       </main>
+      <ProjectFormView project={viewFormProject} onClose={() => setViewFormProject(null)} />
     </div>
   );
 }

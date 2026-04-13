@@ -7,13 +7,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ChevronDown, ChevronRight, Download, FileText, ExternalLink, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Eye, FileText, ExternalLink, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PaginationBar, PAGE_SIZE, paginateItems } from "@/components/ui/pagination-bar";
+import { ProjectFormView, type FullProject } from "@/components/project-form-view";
 
 type Project = {
   id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
-  projectType: string; createdAt: string; lastGeneratedAt?: string; createdBy: string;
+  projectType: string; projectSize?: string | null; value?: string | null;
+  startDate?: string | null; endDate?: string | null; summary?: string | null;
+  sponsorName?: string | null; sponsorRole?: string | null;
+  billingMilestones?: Array<{ stage: string; percentage: number; value?: string | null; date?: string | null }> | null;
+  flipsideStakeholders?: Array<{ name: string; role: string }> | null;
+  clientStakeholders?: Array<{ name: string; role: string }> | null;
+  createdAt: string; lastGeneratedAt?: string; createdBy: string;
   smartsheetId?: string | null; smartsheetUrl?: string | null; timelineGeneratedAt?: string | null;
 };
 type StoredDocument = {
@@ -41,6 +48,9 @@ export default function MyProjectsPage() {
   const [timelineError, setTimelineError] = useState<Record<string, string>>({});
   const [deletingDoc, setDeletingDoc] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState<string | null>(null);
+  const [deletingSupportingDoc, setDeletingSupportingDoc] = useState<string | null>(null);
+  const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [viewFormProject, setViewFormProject] = useState<FullProject | null>(null);
 
   // Pagination state
   const [draftsPage, setDraftsPage] = useState(1);
@@ -183,6 +193,37 @@ export default function MyProjectsPage() {
     }
   };
 
+  const deleteSupportingDoc = async (doc: SupportingDocument) => {
+    if (!confirm(`Delete supporting document "${doc.name}"?`)) return;
+    setDeletingSupportingDoc(doc.id);
+    try {
+      const res = await fetch(`/api/supporting-documents/${doc.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", expandedProject, "supporting-docs"] });
+      toast.success(`Deleted ${doc.name}`);
+    } catch {
+      toast.error("Failed to delete supporting document");
+    } finally {
+      setDeletingSupportingDoc(null);
+    }
+  };
+
+  const deleteProject = async (project: Project) => {
+    if (!confirm(`Delete project "${project.projectName}" and all its documents? This cannot be undone.`)) return;
+    setDeletingProject(project.id);
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
+      setExpandedProject(null);
+      toast.success(`Project "${project.projectName}" deleted`);
+    } catch {
+      toast.error("Failed to delete project");
+    } finally {
+      setDeletingProject(null);
+    }
+  };
+
   const generateTimeline = async (project: Project, mode: "update" | "new" = project.smartsheetId ? "update" : "new") => {
     setTimelinePending(project.id);
     setTimelineElapsed(0);
@@ -209,14 +250,20 @@ export default function MyProjectsPage() {
         ) as any,
       });
     } catch (err: any) {
-      const msg = err?.name === "AbortError" ? "Timed out after 5 minutes — the sheet may still be processing in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
+      const msg = err?.name === "AbortError" ? "Timed out — the sheet may still be processing in Smartsheet. Refresh and check before retrying." : (err?.message ?? "Failed");
       setTimelineError((prev) => ({ ...prev, [project.id]: msg }));
     } finally {
       clearTimeout(timeout);
       clearInterval(elapsedInterval);
-      // Use setTimeout to clear state in a fresh macrotask so React 18
-      // automatic batching doesn't defer the flush indefinitely.
-      setTimeout(() => { setTimelinePending(null); setTimelineElapsed(0); }, 0);
+      console.log("[timeline] finally — clearing timelinePending");
+      // Immediate attempt + macrotask fallback to ensure React flushes the update.
+      setTimelinePending(null);
+      setTimelineElapsed(0);
+      setTimeout(() => {
+        console.log("[timeline] setTimeout fired — forcing timelinePending=null");
+        setTimelinePending(null);
+        setTimelineElapsed(0);
+      }, 0);
     }
   };
 
@@ -255,6 +302,9 @@ export default function MyProjectsPage() {
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-sm font-semibold">Documents</p>
                   <div className="flex gap-2 flex-wrap justify-end">
+                    <Button size="sm" variant="outline" className="font-bold" onClick={() => setViewFormProject(project)}>
+                      <Eye className="h-3.5 w-3.5 mr-1" /> View Form
+                    </Button>
                     {docs.length > 0 && (
                       <Button size="sm" variant="outline" className="font-bold" onClick={() => downloadAll(project.id)}>
                         <Download className="h-3.5 w-3.5 mr-1" /> Download All
@@ -288,6 +338,15 @@ export default function MyProjectsPage() {
                         {docs.length === 0 ? "Generate Documents" : "Generate Again"}
                       </Button>
                     </Link>
+                    <Button
+                      size="sm" variant="ghost"
+                      className="font-bold text-muted-foreground hover:text-destructive"
+                      disabled={deletingProject === project.id}
+                      onClick={(e) => { e.stopPropagation(); deleteProject(project); }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                      {deletingProject === project.id ? "Deleting…" : "Delete Project"}
+                    </Button>
                   </div>
                 </div>
                 {/* Supporting documents reference section */}
@@ -298,15 +357,24 @@ export default function MyProjectsPage() {
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {supportingDocs.map((doc) => (
-                        <button
-                          key={doc.id}
-                          onClick={() => downloadSupportingDoc(doc)}
-                          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium hover:bg-muted transition-colors"
-                          title={`Download ${doc.name} (${(doc.fileSize / 1024).toFixed(0)} KB)`}
-                        >
-                          <Download className="h-3 w-3 shrink-0" />
-                          {doc.name}
-                        </button>
+                        <div key={doc.id} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-background text-xs font-medium">
+                          <button
+                            onClick={() => downloadSupportingDoc(doc)}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-muted transition-colors rounded-l-md"
+                            title={`Download ${doc.name} (${(doc.fileSize / 1024).toFixed(0)} KB)`}
+                          >
+                            <Download className="h-3 w-3 shrink-0" />
+                            {doc.name}
+                          </button>
+                          <button
+                            onClick={() => deleteSupportingDoc(doc)}
+                            disabled={deletingSupportingDoc === doc.id}
+                            className="flex items-center px-1.5 py-1.5 text-muted-foreground hover:text-destructive hover:bg-muted transition-colors rounded-r-md border-l border-border"
+                            title={`Delete ${doc.name}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -343,7 +411,7 @@ export default function MyProjectsPage() {
                                         <Download className="h-3 w-3 mr-1" />
                                         {doc.isLatest ? "Latest" : "Download"}
                                       </Button>
-                                      {isAdmin && (
+                                      {(isAdmin || project.createdBy === user?.id) && (
                                         <Button
                                           size="sm" variant="ghost"
                                           className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
@@ -524,6 +592,7 @@ export default function MyProjectsPage() {
           </div>
         )}
       </main>
+      <ProjectFormView project={viewFormProject} onClose={() => setViewFormProject(null)} />
     </div>
   );
 }

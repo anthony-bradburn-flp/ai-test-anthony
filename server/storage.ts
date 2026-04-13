@@ -148,6 +148,7 @@ export interface IStorage {
   // Projects
   listProjects(clientId?: string, createdBy?: string): Promise<Project[]>;
   getProject(id: string): Promise<Project | undefined>;
+  findProjectBySheetRef(sheetRef: string): Promise<Project | undefined>;
   createProject(data: Omit<Project, "id" | "createdAt" | "lastGeneratedAt" | "smartsheetId" | "smartsheetUrl" | "timelineGeneratedAt" | "timelineVersion"> & { lastGeneratedAt?: string | null; smartsheetId?: string | null; smartsheetUrl?: string | null; timelineGeneratedAt?: string | null; timelineVersion?: number }): Promise<Project>;
   updateProject(id: string, fields: Partial<Project>): Promise<Project | undefined>;
   deleteProject(id: string): Promise<void>;
@@ -162,6 +163,7 @@ export interface IStorage {
   listSupportingDocs(projectId: string): Promise<SupportingDocument[]>;
   createSupportingDoc(data: Omit<SupportingDocument, "id">): Promise<SupportingDocument>;
   getSupportingDoc(id: string): Promise<SupportingDocument | undefined>;
+  deleteSupportingDoc(id: string): Promise<SupportingDocument | undefined>;
   deleteSupportingDocsByProject(projectId: string): Promise<SupportingDocument[]>;
   // Drafts
   listDrafts(userId: string): Promise<Draft[]>;
@@ -396,6 +398,12 @@ class DbStorage implements IStorage {
     return rows[0];
   }
 
+  async findProjectBySheetRef(sheetRef: string): Promise<Project | undefined> {
+    const rows = await db.select().from(projectsTable);
+    // Case-insensitive match in memory (sheetRef is not indexed)
+    return rows.find(p => p.sheetRef?.trim().toLowerCase() === sheetRef.trim().toLowerCase());
+  }
+
   async createProject(data: Parameters<IStorage["createProject"]>[0]): Promise<Project> {
     const row = {
       ...data,
@@ -482,6 +490,13 @@ class DbStorage implements IStorage {
 
   async getSupportingDoc(id: string): Promise<SupportingDocument | undefined> {
     const rows = await db.select().from(supportingDocumentsTable).where(eq(supportingDocumentsTable.id, id));
+    return rows[0];
+  }
+
+  async deleteSupportingDoc(id: string): Promise<SupportingDocument | undefined> {
+    const rows = await db.delete(supportingDocumentsTable)
+      .where(eq(supportingDocumentsTable.id, id))
+      .returning();
     return rows[0];
   }
 
