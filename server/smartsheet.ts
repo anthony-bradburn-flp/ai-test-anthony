@@ -126,6 +126,19 @@ function buildTimelinePrompt(project: Project, supportingDocs: Array<{ name: str
     ? `\nSupporting documents (use phases, tasks, and structure described here to inform your timeline):\n${supportingDocs.map((d) => `--- ${d.name} ---\n${d.content}`).join("\n\n")}\n`
     : "";
 
+  const taskCountGuideline = {
+    Small:      "10–15",
+    Medium:     "20–30",
+    Large:      "35–50",
+    Enterprise: "45–60",
+  }[project.projectSize as string] ?? "15–30";
+
+  const pmName = (project.flipsideStakeholders as { name: string; role: string }[])
+    .find((s) => /project\s*manager|^pm$/i.test(s.role))?.name?.split(" ")[0] ?? null;
+  const ownerFallback = pmName
+    ? `If the owner is not clearly a client-side or Flipside delivery person, assign to ${pmName} (Project Manager)`
+    : "Use 'TBC' only if genuinely unclear";
+
   return `You are a project management expert. Generate a detailed project timeline as a JSON object.
 
 Project details:
@@ -160,16 +173,18 @@ Each task must have exactly these fields:
 }
 
 Guidelines:
-- Generate 15–30 tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
+- Generate ${taskCountGuideline} tasks appropriate for a ${project.projectType} project of ${project.projectSize} size
 - If supporting documents describe specific phases, workstreams or deliverables, reflect those in the task list and phase names
 - Assign phases based on logical project stages (e.g. Discovery, Scoping, Design, Development, Content, Testing, UAT, Launch Prep, Go Live, Handover). Choose phases that fit a ${project.projectType} project — not all apply.
 - Use the billing milestones as date anchors to ensure key deliverables land on or before milestone dates
 - Owner assignment rules:
   * Flipside team members own: project management, design, development, UAT amend fixes, DevOps, delivery tasks
   * Client team members own: content provision, approvals, sign-off, UAT testing/execution, stakeholder reviews, client-side actions
-  * Use first name only (e.g. "Tim", "Anthony") or a client first name; use 'TBC' only if genuinely unclear
+  * Use first name only (e.g. "Tim", "Anthony") or a client first name
+  * ${ownerFallback}
 - Tasks within a phase should appear in sequence; use predecessors to link dependent tasks
 - The first task of each phase typically has no predecessor or depends on the last task of the previous phase
+- All task start dates must fall on a Monday–Friday (no weekend start dates)
 - Assign realistic start/end dates between ${project.startDate} and ${project.endDate}
 - All dates must be in YYYY-MM-DD format
 - Return only valid JSON, no markdown, no explanation`;
