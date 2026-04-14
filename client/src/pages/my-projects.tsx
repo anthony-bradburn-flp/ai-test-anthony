@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ChevronDown, ChevronRight, Download, Eye, FileText, ExternalLink, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Eye, Edit2, FileText, ExternalLink, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { PaginationBar, PAGE_SIZE, paginateItems } from "@/components/ui/pagination-bar";
 import { ProjectFormView, type FullProject } from "@/components/project-form-view";
+import { EditProjectModal } from "@/components/edit-project-modal";
 
 type Project = {
   id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
@@ -52,6 +53,7 @@ export default function MyProjectsPage() {
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
   const [deletingBulkDocs, setDeletingBulkDocs] = useState<{ projectId: string; version?: number } | null>(null);
   const [viewFormProject, setViewFormProject] = useState<FullProject | null>(null);
+  const [editingProject, setEditingProject] = useState<FullProject | null>(null);
 
   // Pagination state
   const [draftsPage, setDraftsPage] = useState(1);
@@ -324,6 +326,9 @@ export default function MyProjectsPage() {
                   <div className="flex gap-2 flex-wrap justify-end">
                     <Button size="sm" variant="outline" className="font-bold" onClick={() => setViewFormProject(project)}>
                       <Eye className="h-3.5 w-3.5 mr-1" /> View Form
+                    </Button>
+                    <Button size="sm" variant="outline" className="font-bold" onClick={() => setEditingProject(project)}>
+                      <Edit2 className="h-3.5 w-3.5 mr-1" /> Edit Details
                     </Button>
                     {docs.length > 0 && (
                       <Button size="sm" variant="outline" className="font-bold" onClick={() => downloadAll(project.id)}>
@@ -641,6 +646,7 @@ export default function MyProjectsPage() {
         )}
       </main>
       <ProjectFormView project={viewFormProject} onClose={() => setViewFormProject(null)} />
+      <EditProjectModal project={editingProject} onClose={() => setEditingProject(null)} />
     </div>
   );
 }

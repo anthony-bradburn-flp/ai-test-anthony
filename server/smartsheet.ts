@@ -201,7 +201,8 @@ export async function createTimelineSheet(
   workspaceId?: string | null
 ): Promise<TimelineResult> {
   const client = getClient();
-  const sheetName = `${project.sheetRef} - ${project.projectName} Timeline`;
+  const rawSheetName = `${project.sheetRef} - ${project.projectName} Timeline`;
+  const sheetName = rawSheetName.length > 50 ? rawSheetName.slice(0, 47) + "…" : rawSheetName;
 
   const columns = COLUMNS.map((c) => ({ title: c.title, type: c.type, primary: c.primary }));
 
