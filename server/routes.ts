@@ -580,8 +580,13 @@ export async function registerRoutes(
   });
 
   app.patch("/api/projects/:id", requireAuth, async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Not found" });
+    const session = req.session as { userId?: string; role?: string };
+    if (session.role !== "admin" && session.role !== "manager" && project.createdBy !== session.userId) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
     const updated = await storage.updateProject(req.params.id, req.body);
-    if (!updated) return res.status(404).json({ message: "Not found" });
     res.json(updated);
   });
 

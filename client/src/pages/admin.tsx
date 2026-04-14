@@ -4,6 +4,7 @@ import mammoth from "mammoth/mammoth.browser";
 import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
 import { ProjectFormView, type FullProject } from "@/components/project-form-view";
+import { EditProjectModal } from "@/components/edit-project-modal";
 import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound, ExternalLink } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -643,6 +644,7 @@ export default function AdminPage() {
   const [deletingAdminSupportingDoc, setDeletingAdminSupportingDoc] = useState<string | null>(null);
   const [deletingAdminBulkDocs, setDeletingAdminBulkDocs] = useState<{ projectId: string; version?: number } | null>(null);
   const [viewFormProject, setViewFormProject] = useState<FullProject | null>(null);
+  const [editingProject, setEditingProject] = useState<FullProject | null>(null);
 
   const { data: clientsData = [], isLoading: clientsLoading } = useQuery<AdminClient[]>({
     queryKey: ["/api/clients"],
@@ -1606,6 +1608,9 @@ export default function AdminPage() {
                                 <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title="View submitted form" onClick={() => setViewFormProject(project)}>
                                   <Eye className="h-4 w-4" />
                                 </Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title="Edit project details" onClick={() => setEditingProject(project)}>
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
                                 {project.smartsheetUrl && (
                                   <a href={project.smartsheetUrl} target="_blank" rel="noopener noreferrer">
                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title="View Smartsheet timeline">
@@ -1951,6 +1956,7 @@ export default function AdminPage() {
         </Tabs>
       </main>
       <ProjectFormView project={viewFormProject} onClose={() => setViewFormProject(null)} />
+      <EditProjectModal project={editingProject} onClose={() => setEditingProject(null)} />
     </div>
   );
 }
