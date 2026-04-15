@@ -34,10 +34,12 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { toast } from "sonner";
+import { RoleCombobox } from "@/components/role-combobox";
 
 const stakeholderSchema = z.object({
   name: z.string().min(1, "Please enter a name"),
   role: z.string().min(1, "Please enter a role"),
+  allocation: z.number().int().min(10).max(100).optional(),
 });
 
 const billingMilestoneSchema = z.object({
@@ -107,7 +109,7 @@ function SectionCard({ id, title, badge, action, children }: { id: string; title
 }
 
 type Client = { id: string; name: string };
-type Project = { id: string; clientId: string; clientName: string; projectName: string; sheetRef: string; projectType: string; projectSize: string; value: string; startDate: string; endDate: string; summary: string; sponsorName: string; sponsorRole: string; billingMilestones: { stage: string; percentage: number; value?: number; date: string }[]; flipsideStakeholders: { name: string; role: string }[]; clientStakeholders: { name: string; role: string }[]; };
+type Project = { id: string; clientId: string; clientName: string; projectName: string; sheetRef: string; projectType: string; projectSize: string; value: string; startDate: string; endDate: string; summary: string; sponsorName: string; sponsorRole: string; billingMilestones: { stage: string; percentage: number; value?: number; date: string }[]; flipsideStakeholders: { name: string; role: string; allocation?: number }[]; clientStakeholders: { name: string; role: string; allocation?: number }[]; };
 
 export default function GovernanceStarterPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -314,10 +316,10 @@ export default function GovernanceStarterPage() {
       ],
       summary: "",
       flipsideStakeholders: [
-        { name: "", role: "Account Lead" },
-        { name: "", role: "Project Manager" },
+        { name: "", role: "Account Lead", allocation: 100 },
+        { name: "", role: "Project Manager", allocation: 100 },
       ],
-      clientStakeholders: [{ name: "", role: "" }],
+      clientStakeholders: [{ name: "", role: "", allocation: 100 }],
       sponsorIndex: 0,
       docsRequired: [],
     },
@@ -1264,8 +1266,8 @@ export default function GovernanceStarterPage() {
 
                   return (
                     <div key={field.id} className="rounded-xl border border-border bg-background p-3">
-                      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-[1fr_1fr_auto] md:items-end">
-                        
+                      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-[1fr_1fr_110px_auto] md:items-end">
+
                         <FormField
                           control={form.control}
                           name={`flipsideStakeholders.${index}.name`}
@@ -1291,13 +1293,43 @@ export default function GovernanceStarterPage() {
                                 Role <span className="text-destructive font-extrabold ml-1">*</span>
                               </FormLabel>
                               <FormControl>
-                                <Input 
-                                  placeholder="Role" 
-                                  {...field} 
+                                <RoleCombobox
+                                  value={field.value}
+                                  onChange={field.onChange}
                                   disabled={isRequiredRole}
                                 />
                               </FormControl>
                               <FormMessage className="text-xs" />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name={`flipsideStakeholders.${index}.allocation`}
+                          render={({ field }) => (
+                            <FormItem className="space-y-1.5">
+                              <FormLabel className="text-xs font-semibold text-muted-foreground">
+                                Allocation
+                              </FormLabel>
+                              <Select
+                                onValueChange={(val) => field.onChange(parseInt(val, 10))}
+                                value={field.value?.toString() ?? ""}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="100%" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  <SelectItem value="10">10%</SelectItem>
+                                  <SelectItem value="20">20%</SelectItem>
+                                  <SelectItem value="25">25%</SelectItem>
+                                  <SelectItem value="50">50%</SelectItem>
+                                  <SelectItem value="75">75%</SelectItem>
+                                  <SelectItem value="100">100%</SelectItem>
+                                </SelectContent>
+                              </Select>
                             </FormItem>
                           )}
                         />
@@ -1360,8 +1392,8 @@ export default function GovernanceStarterPage() {
               <div className="flex flex-col gap-2.5">
                 {clientArray.fields.map((field, index) => (
                   <div key={field.id} className="rounded-xl border border-border bg-background p-3">
-                    <div className="grid grid-cols-1 gap-2.5 md:grid-cols-[5fr_5fr_2fr_auto] md:items-end">
-                      
+                    <div className="grid grid-cols-1 gap-2.5 md:grid-cols-[1fr_1fr_110px_160px_auto] md:items-end">
+
                       <FormField
                         control={form.control}
                         name={`clientStakeholders.${index}.name`}
@@ -1387,9 +1419,42 @@ export default function GovernanceStarterPage() {
                               Role <span className="text-destructive font-extrabold ml-1">*</span>
                             </FormLabel>
                             <FormControl>
-                              <Input placeholder="Role" {...field} />
+                              <RoleCombobox
+                                value={field.value}
+                                onChange={field.onChange}
+                              />
                             </FormControl>
                             <FormMessage className="text-xs" />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name={`clientStakeholders.${index}.allocation`}
+                        render={({ field }) => (
+                          <FormItem className="space-y-1.5">
+                            <FormLabel className="text-xs font-semibold text-muted-foreground">
+                              Allocation
+                            </FormLabel>
+                            <Select
+                              onValueChange={(val) => field.onChange(parseInt(val, 10))}
+                              value={field.value?.toString() ?? ""}
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="100%" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="10">10%</SelectItem>
+                                <SelectItem value="20">20%</SelectItem>
+                                <SelectItem value="25">25%</SelectItem>
+                                <SelectItem value="50">50%</SelectItem>
+                                <SelectItem value="75">75%</SelectItem>
+                                <SelectItem value="100">100%</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </FormItem>
                         )}
                       />

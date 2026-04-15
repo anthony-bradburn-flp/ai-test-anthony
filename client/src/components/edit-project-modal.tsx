@@ -12,11 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { RoleCombobox } from "@/components/role-combobox";
 import type { FullProject } from "@/components/project-form-view";
 
 const stakeholderSchema = z.object({
   name: z.string().min(1, "Required"),
   role: z.string().min(1, "Required"),
+  allocation: z.number().int().min(10).max(100).optional(),
 });
 
 const milestoneSchema = z.object({
@@ -84,10 +86,10 @@ export function EditProjectModal({
       sponsorName: project.sponsorName ?? "",
       sponsorRole: project.sponsorRole ?? "",
       flipsideStakeholders: project.flipsideStakeholders?.length
-        ? project.flipsideStakeholders.map((s) => ({ name: s.name, role: s.role }))
+        ? project.flipsideStakeholders.map((s) => ({ name: s.name, role: s.role, allocation: s.allocation }))
         : [{ name: "", role: "" }],
       clientStakeholders: project.clientStakeholders?.length
-        ? project.clientStakeholders.map((s) => ({ name: s.name, role: s.role }))
+        ? project.clientStakeholders.map((s) => ({ name: s.name, role: s.role, allocation: s.allocation }))
         : [{ name: "", role: "" }],
       billingMilestones: project.billingMilestones?.length
         ? project.billingMilestones.map((m) => ({
@@ -235,13 +237,13 @@ export function EditProjectModal({
             <section>
               <div className="flex items-center justify-between border-b pb-1 mb-3">
                 <h3 className="text-sm font-bold">Flipside Team</h3>
-                <Button type="button" size="sm" variant="ghost" onClick={() => flipside.append({ name: "", role: "" })}>
+                <Button type="button" size="sm" variant="ghost" onClick={() => flipside.append({ name: "", role: "", allocation: 100 })}>
                   <Plus className="h-3.5 w-3.5 mr-1" /> Add
                 </Button>
               </div>
               <div className="space-y-2">
                 {flipside.fields.map((f, i) => (
-                  <div key={f.id} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-start">
+                  <div key={f.id} className="grid grid-cols-[1fr_1fr_90px_auto] gap-2 items-start">
                     <FormField control={form.control} name={`flipsideStakeholders.${i}.name`} render={({ field }) => (
                       <FormItem>
                         {i === 0 && <FormLabel className="text-xs text-muted-foreground">Name</FormLabel>}
@@ -252,8 +254,25 @@ export function EditProjectModal({
                     <FormField control={form.control} name={`flipsideStakeholders.${i}.role`} render={({ field }) => (
                       <FormItem>
                         {i === 0 && <FormLabel className="text-xs text-muted-foreground">Role</FormLabel>}
-                        <FormControl><Input placeholder="Role" {...field} /></FormControl>
+                        <FormControl>
+                          <RoleCombobox value={field.value} onChange={field.onChange} />
+                        </FormControl>
                         <FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={form.control} name={`flipsideStakeholders.${i}.allocation`} render={({ field }) => (
+                      <FormItem>
+                        {i === 0 && <FormLabel className="text-xs text-muted-foreground">Alloc.</FormLabel>}
+                        <Select onValueChange={(v) => field.onChange(parseInt(v, 10))} value={field.value?.toString() ?? ""}>
+                          <FormControl>
+                            <SelectTrigger><SelectValue placeholder="100%" /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {[10, 20, 25, 50, 75, 100].map((p) => (
+                              <SelectItem key={p} value={p.toString()}>{p}%</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </FormItem>
                     )} />
                     <div className={i === 0 ? "pt-6" : ""}>
@@ -271,13 +290,13 @@ export function EditProjectModal({
             <section>
               <div className="flex items-center justify-between border-b pb-1 mb-3">
                 <h3 className="text-sm font-bold">Client Team</h3>
-                <Button type="button" size="sm" variant="ghost" onClick={() => clientSH.append({ name: "", role: "" })}>
+                <Button type="button" size="sm" variant="ghost" onClick={() => clientSH.append({ name: "", role: "", allocation: 100 })}>
                   <Plus className="h-3.5 w-3.5 mr-1" /> Add
                 </Button>
               </div>
               <div className="space-y-2">
                 {clientSH.fields.map((f, i) => (
-                  <div key={f.id} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-start">
+                  <div key={f.id} className="grid grid-cols-[1fr_1fr_90px_auto] gap-2 items-start">
                     <FormField control={form.control} name={`clientStakeholders.${i}.name`} render={({ field }) => (
                       <FormItem>
                         {i === 0 && <FormLabel className="text-xs text-muted-foreground">Name</FormLabel>}
@@ -288,8 +307,25 @@ export function EditProjectModal({
                     <FormField control={form.control} name={`clientStakeholders.${i}.role`} render={({ field }) => (
                       <FormItem>
                         {i === 0 && <FormLabel className="text-xs text-muted-foreground">Role</FormLabel>}
-                        <FormControl><Input placeholder="Role" {...field} /></FormControl>
+                        <FormControl>
+                          <RoleCombobox value={field.value} onChange={field.onChange} />
+                        </FormControl>
                         <FormMessage />
+                      </FormItem>
+                    )} />
+                    <FormField control={form.control} name={`clientStakeholders.${i}.allocation`} render={({ field }) => (
+                      <FormItem>
+                        {i === 0 && <FormLabel className="text-xs text-muted-foreground">Alloc.</FormLabel>}
+                        <Select onValueChange={(v) => field.onChange(parseInt(v, 10))} value={field.value?.toString() ?? ""}>
+                          <FormControl>
+                            <SelectTrigger><SelectValue placeholder="100%" /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {[10, 20, 25, 50, 75, 100].map((p) => (
+                              <SelectItem key={p} value={p.toString()}>{p}%</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </FormItem>
                     )} />
                     <div className={i === 0 ? "pt-6" : ""}>
