@@ -936,7 +936,7 @@ export default function GovernanceStarterPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {["Web", "App", "Strategy", "Design", "Content", "XR/AR"].map((type) => (
+                          {(availablePackages ?? []).map(({ type }) => (
                             <SelectItem key={type} value={type}>
                               {type}
                             </SelectItem>
