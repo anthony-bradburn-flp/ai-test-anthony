@@ -872,6 +872,15 @@ export async function registerRoutes(
     if (res.socket) res.socket.setNoDelay(true);
 
     const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
+
+    // Heartbeat: sends a ping every 20 s to keep the socket alive and prevent
+    // the idle timeout from firing between slow AI calls (e.g. large summaries).
+    const heartbeatInterval = setInterval(() => {
+      if (!res.writableEnded) {
+        res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
+      }
+    }, 20_000);
+    const stopHeartbeat = () => clearInterval(heartbeatInterval);
     const generatedDocBuffers: Array<{ name: string; filename: string; format: string; buffer: Buffer }> = [];
     const sendDoc = (event: Record<string, unknown>) => {
       const doc = event.document as { name: string; filename: string; format: string; content: string } | undefined;
@@ -1306,11 +1315,13 @@ export async function registerRoutes(
         });
       }
 
+      stopHeartbeat();
       console.log(`[generate] sending done event at ${new Date().toISOString()}`);
       send({ type: "done", provider: settings.provider });
       // Close the stream — fires the 'finish' event once fully flushed, triggering background work.
       res.end();
     } catch (err: unknown) {
+      stopHeartbeat();
       const message = err instanceof Error ? err.message : "AI generation failed";
       audit("GENERATE_FAILED", req, { error: message });
       send({ type: "error", error: message });
