@@ -1428,8 +1428,8 @@ function buildPlaceholderData(projectData: GenerateRequest, aiArrays: Record<str
     sponsor_name: sponsor?.name ?? "",
     sponsor_role: sponsor?.role ?? "",
     generated_date: new Date().toLocaleDateString("en-GB"),
-    flipside_team: projectData.flipsideStakeholders.map((s) => ({ name: s.name, role: s.role })),
-    client_team:   projectData.clientStakeholders.map((s) => ({ name: s.name, role: s.role })),
+    flipside_team: projectData.flipsideStakeholders.map((s: { name: string; role: string; allocation?: number }) => ({ name: s.name, role: s.role, allocation: s.allocation ?? 100 })),
+    client_team:   projectData.clientStakeholders.map((s: { name: string; role: string; allocation?: number }) => ({ name: s.name, role: s.role, allocation: s.allocation ?? 100 })),
     milestones:    (projectData.billingMilestones ?? []).map((m: Record<string, unknown>) => ({
       stage:      m.stage ?? "",
       percentage: m.percentage ?? "",
@@ -1467,10 +1467,18 @@ function buildPlaceholderArrayPrompt(
     lines.push(`Sponsor: ${sponsor.name} (${sponsor.role})`);
   }
   if (projectData.flipsideStakeholders?.length) {
-    lines.push(`Delivery Team: ${projectData.flipsideStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+    const team = projectData.flipsideStakeholders.map((s: { name: string; role: string; allocation?: number }) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}%` : "";
+      return `${s.name} (${s.role}${alloc})`;
+    }).join(", ");
+    lines.push(`Delivery Team: ${team}`);
   }
   if (projectData.clientStakeholders?.length) {
-    lines.push(`Client Stakeholders: ${projectData.clientStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+    const team = projectData.clientStakeholders.map((s: { name: string; role: string; allocation?: number }) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}%` : "";
+      return `${s.name} (${s.role}${alloc})`;
+    }).join(", ");
+    lines.push(`Client Stakeholders: ${team}`);
   }
   if (projectData.billingMilestones?.length) {
     lines.push(`Billing Milestones: ${projectData.billingMilestones.map((m: Record<string, unknown>) => `${m.stage} ${m.percentage}% by ${m.date}`).join(", ")}`);
@@ -1771,12 +1779,16 @@ function buildUserPrompt(data: GenerateRequest): string {
     ...data.billingMilestones.map((m) => `  - ${m.stage}: ${m.percentage}% (${m.date})`),
     ``,
     `Flipside Stakeholders:`,
-    ...data.flipsideStakeholders.map((s) => `  - ${s.name} (${s.role})`),
+    ...data.flipsideStakeholders.map((s: { name: string; role: string; allocation?: number }) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}% allocation` : "";
+      return `  - ${s.name} (${s.role}${alloc})`;
+    }),
     ``,
     `Client Stakeholders:`,
-    ...data.clientStakeholders.map((s, i) =>
-      `  - ${s.name} (${s.role})${i === data.sponsorIndex ? " [Sponsor]" : ""}`
-    ),
+    ...data.clientStakeholders.map((s: { name: string; role: string; allocation?: number }, i: number) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}% allocation` : "";
+      return `  - ${s.name} (${s.role}${alloc})${i === data.sponsorIndex ? " [Sponsor]" : ""}`;
+    }),
     ...(sponsor ? [``, `Sponsor: ${sponsor.name} (${sponsor.role})`] : []),
   ];
 
