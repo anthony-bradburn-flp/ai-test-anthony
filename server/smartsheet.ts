@@ -114,11 +114,17 @@ function buildTimelinePrompt(project: Project, supportingDocs: Array<{ name: str
   const milestones = (project.billingMilestones as { stage: string; percentage: number; date: string }[])
     .map((m) => `  - ${m.stage} (${m.percentage}%): ${m.date}`)
     .join("\n");
-  const flipsideTeam = (project.flipsideStakeholders as { name: string; role: string }[])
-    .map((s) => `  - ${s.name} (${s.role})`)
+  const flipsideTeam = (project.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
+    .map((s) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}% allocation` : "";
+      return `  - ${s.name} (${s.role}${alloc})`;
+    })
     .join("\n");
-  const clientTeam = (project.clientStakeholders as { name: string; role: string }[])
-    .map((s) => `  - ${s.name} (${s.role})`)
+  const clientTeam = (project.clientStakeholders as { name: string; role: string; allocation?: number }[])
+    .map((s) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}% allocation` : "";
+      return `  - ${s.name} (${s.role}${alloc})`;
+    })
     .join("\n");
 
   // Use the full extracted text (already capped at 15,000 chars each by extractSupportingDocText)
@@ -133,7 +139,7 @@ function buildTimelinePrompt(project: Project, supportingDocs: Array<{ name: str
     Enterprise: "45–60",
   }[project.projectSize as string] ?? "15–30";
 
-  const pmName = (project.flipsideStakeholders as { name: string; role: string }[])
+  const pmName = (project.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
     .find((s) => /project\s*manager|^pm$/i.test(s.role))?.name?.split(" ")[0] ?? null;
   const ownerFallback = pmName
     ? `If the owner is not clearly a client-side or Flipside delivery person, assign to ${pmName} (Project Manager)`
@@ -182,6 +188,7 @@ Guidelines:
   * Client team members own: content provision, approvals, sign-off, UAT testing/execution, stakeholder reviews, client-side actions
   * Use first name only (e.g. "Tim", "Anthony") or a client first name
   * ${ownerFallback}
+  * Respect allocation: if a team member is listed as e.g. 50% allocation, do not assign them simultaneous parallel tasks and ensure their workload reflects reduced availability — fewer concurrent tasks, longer elapsed time for their tasks
 - Tasks within a phase should appear in sequence; use predecessors to link dependent tasks
 - The first task of each phase typically has no predecessor or depends on the last task of the previous phase
 - All task start dates must fall on a Monday–Friday (no weekend start dates)

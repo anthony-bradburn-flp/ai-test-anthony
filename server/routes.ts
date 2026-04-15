@@ -1191,134 +1191,131 @@ export async function registerRoutes(
 
       audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: allDocNames.length + execSummaryCount, provider: settings.provider, supportingDocsCount: supportingDocs.length, passthroughCount: passthroughDocNames.length, placeholderCount: placeholderDocNames.length });
 
-      // --- Persist documents, supporting docs, and generate timeline in background ---
-      // Register the background IIFE on the response 'finish' event so it only runs
-      // AFTER the HTTP response body (done event) has been fully flushed to the OS.
-      // This guarantees the client receives the done event before any background I/O starts.
+      // --- Persist documents and supporting docs BEFORE sending done ---
+      // This ensures documents are in the DB by the time the client invalidates
+      // its React Query cache, eliminating the race condition where the cache
+      // refetch returned empty results before the background IIFE could write.
       if (projectId) {
         const savedUserId = req.session.userId!;
-        const doGenTimeline = generateTimeline;
         const capturedSupportingDocs = supportingDocs;
-        const capturedProjectData = projectData; // current form values — fresher than DB
+        const capturedProjectData = projectData;
         const capturedRawDocs = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : []) as Array<{ name: string; content: string }>;
-        res.once("finish", () => {
-          (async () => {
+
+        try {
+          // 1. Save generated documents
+          if (generatedDocBuffers.length > 0) {
+            const projectDir = join(DOCUMENTS_DIR, projectId);
+            if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+            const existingDocs = await storage.listDocuments(projectId);
+            const runId = randomBytes(8).toString("hex");
+
+            let nextVersion = 1;
+            if (existingDocs.length > 0) {
+              if (versionMode === "replace") {
+                await storage.deleteDocumentsByProject(projectId);
+              } else {
+                const maxVersion = Math.max(...existingDocs.map((d) => d.version));
+                nextVersion = maxVersion + 1;
+                await storage.markDocumentsNotLatest(projectId);
+              }
+            }
+
+            for (const { name, filename, format, buffer } of generatedDocBuffers) {
+              const docId = randomBytes(8).toString("hex");
+              const storagePath = `documents/${projectId}/${docId}_${filename}`;
+              const fullPath = join(DATA_DIR, storagePath);
+              await writeFile(fullPath, buffer);
+              await storage.createDocument({
+                projectId, name, filename, format,
+                storagePath, fileSize: buffer.length,
+                generatedAt: new Date().toISOString(),
+                generatedBy: savedUserId,
+                runId, version: nextVersion,
+                versionLabel: `v${nextVersion}`, isLatest: true,
+              });
+            }
+            await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+            console.log(`[generate] persisted ${generatedDocBuffers.length} documents at ${new Date().toISOString()}`);
+          }
+
+          // 2. Save supporting documents
+          if (capturedRawDocs.length > 0) {
             try {
-              // 1. Save generated documents (async writes to avoid blocking event loop)
-              if (generatedDocBuffers.length > 0) {
-                const projectDir = join(DOCUMENTS_DIR, projectId);
-                if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
-                const existingDocs = await storage.listDocuments(projectId);
-                const runId = randomBytes(8).toString("hex");
+              const projectSuppDir = join(SUPPORTING_DOCS_DIR, projectId);
+              if (!existsSync(projectSuppDir)) mkdirSync(projectSuppDir, { recursive: true });
+              const oldDocs = await storage.deleteSupportingDocsByProject(projectId);
+              for (const old of oldDocs) {
+                try { unlinkSync(join(DATA_DIR, old.storagePath)); } catch { /* file may already be gone */ }
+              }
+              for (const doc of capturedRawDocs) {
+                const ext = extname(doc.name) || ".bin";
+                const docId = randomBytes(8).toString("hex");
+                const filename = `${docId}${ext}`;
+                const storagePath = `supporting-docs/${projectId}/${filename}`;
+                const fullPath = join(DATA_DIR, storagePath);
+                const buffer = Buffer.from(doc.content, "base64");
+                await writeFile(fullPath, buffer);
+                await storage.createSupportingDoc({
+                  projectId,
+                  name: doc.name,
+                  filename,
+                  storagePath,
+                  fileSize: buffer.length,
+                  uploadedAt: new Date().toISOString(),
+                  uploadedBy: savedUserId,
+                });
+              }
+            } catch (suppErr) {
+              console.error("[generate] Failed to save supporting docs:", suppErr);
+            }
+          }
+        } catch (saveErr) {
+          console.error("[generate] Failed to persist documents before done:", saveErr);
+        }
 
-                let nextVersion = 1;
-                if (existingDocs.length > 0) {
-                  if (versionMode === "replace") {
-                    await storage.deleteDocumentsByProject(projectId);
-                  } else {
-                    const maxVersion = Math.max(...existingDocs.map((d) => d.version));
-                    nextVersion = maxVersion + 1;
-                    await storage.markDocumentsNotLatest(projectId);
-                  }
-                }
-
-                for (const { name, filename, format, buffer } of generatedDocBuffers) {
-                  const docId = randomBytes(8).toString("hex");
-                  const storagePath = `documents/${projectId}/${docId}_${filename}`;
-                  const fullPath = join(DATA_DIR, storagePath);
-                  await writeFile(fullPath, buffer); // async — does not block event loop
-                  await storage.createDocument({
-                    projectId, name, filename, format,
-                    storagePath, fileSize: buffer.length,
-                    generatedAt: new Date().toISOString(),
-                    generatedBy: savedUserId,
-                    runId, version: nextVersion,
-                    versionLabel: `v${nextVersion}`, isLatest: true,
+        // 3. Timeline stays async — it's slow (AI + Smartsheet API) and non-critical for the client
+        if (generateTimeline) {
+          res.once("finish", () => {
+            (async () => {
+              try {
+                const dbProject = await storage.getProject(projectId);
+                if (dbProject) {
+                  const mergedProject = {
+                    ...dbProject,
+                    projectName: capturedProjectData.projectName,
+                    projectType: capturedProjectData.projectType,
+                    projectSize: capturedProjectData.projectSize,
+                    startDate: capturedProjectData.startDate,
+                    endDate: capturedProjectData.endDate,
+                    summary: capturedProjectData.summary,
+                    billingMilestones: capturedProjectData.billingMilestones,
+                    flipsideStakeholders: capturedProjectData.flipsideStakeholders,
+                    clientStakeholders: capturedProjectData.clientStakeholders,
+                  };
+                  const tasks = await generateTimelineTasks(mergedProject, settings, capturedSupportingDocs);
+                  const existing = dbProject.smartsheetId;
+                  const tlResult = existing
+                    ? await upsertTimeline(existing, mergedProject, tasks, settings.smartsheetWorkspaceId)
+                    : await createTimelineSheet(mergedProject, tasks, settings.smartsheetWorkspaceId);
+                  const timelineNewVersion = ((dbProject.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
+                  await storage.updateProject(projectId, {
+                    smartsheetId: tlResult.sheetId ?? undefined,
+                    smartsheetUrl: tlResult.sheetUrl,
+                    timelineGeneratedAt: new Date().toISOString(),
+                    timelineVersion: timelineNewVersion,
                   });
                 }
-                await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+              } catch (timelineErr: any) {
+                console.error("[generate] Background timeline generation failed:", timelineErr?.message ?? timelineErr);
               }
-
-              // 2. Save supporting documents (replace any existing ones for this project)
-              if (capturedRawDocs.length > 0) {
-                try {
-                  const projectSuppDir = join(SUPPORTING_DOCS_DIR, projectId);
-                  if (!existsSync(projectSuppDir)) mkdirSync(projectSuppDir, { recursive: true });
-                  // Remove old supporting docs files + DB records
-                  const oldDocs = await storage.deleteSupportingDocsByProject(projectId);
-                  for (const old of oldDocs) {
-                    try { unlinkSync(join(DATA_DIR, old.storagePath)); } catch { /* file may already be gone */ }
-                  }
-                  // Save new ones
-                  for (const doc of capturedRawDocs) {
-                    const ext = extname(doc.name) || ".bin";
-                    const docId = randomBytes(8).toString("hex");
-                    const filename = `${docId}${ext}`;
-                    const storagePath = `supporting-docs/${projectId}/${filename}`;
-                    const fullPath = join(DATA_DIR, storagePath);
-                    const buffer = Buffer.from(doc.content, "base64");
-                    await writeFile(fullPath, buffer);
-                    await storage.createSupportingDoc({
-                      projectId,
-                      name: doc.name,
-                      filename,
-                      storagePath,
-                      fileSize: buffer.length,
-                      uploadedAt: new Date().toISOString(),
-                      uploadedBy: savedUserId,
-                    });
-                  }
-                } catch (suppErr) {
-                  console.error("[generate] Failed to save supporting docs:", suppErr);
-                }
-              }
-
-              // 3. Generate timeline using CURRENT form data (not stale DB record)
-              if (doGenTimeline) {
-                try {
-                  const dbProject = await storage.getProject(projectId);
-                  if (dbProject) {
-                    // Merge DB project (for IDs/smartsheet refs) with current form data (fresh stakeholders/dates)
-                    const mergedProject = {
-                      ...dbProject,
-                      projectName: capturedProjectData.projectName,
-                      projectType: capturedProjectData.projectType,
-                      projectSize: capturedProjectData.projectSize,
-                      startDate: capturedProjectData.startDate,
-                      endDate: capturedProjectData.endDate,
-                      summary: capturedProjectData.summary,
-                      billingMilestones: capturedProjectData.billingMilestones,
-                      flipsideStakeholders: capturedProjectData.flipsideStakeholders,
-                      clientStakeholders: capturedProjectData.clientStakeholders,
-                    };
-                    const tasks = await generateTimelineTasks(mergedProject, settings, capturedSupportingDocs);
-                    const existing = dbProject.smartsheetId;
-                    const tlResult = existing
-                      ? await upsertTimeline(existing, mergedProject, tasks, settings.smartsheetWorkspaceId)
-                      : await createTimelineSheet(mergedProject, tasks, settings.smartsheetWorkspaceId);
-                    const timelineNewVersion = ((dbProject.timelineVersion ?? 0) + (!existing || versionMode === "new" ? 1 : 0)) || 1;
-                    await storage.updateProject(projectId, {
-                      smartsheetId: tlResult.sheetId ?? undefined,
-                      smartsheetUrl: tlResult.sheetUrl,
-                      timelineGeneratedAt: new Date().toISOString(),
-                      timelineVersion: timelineNewVersion,
-                    });
-                  }
-                } catch (timelineErr: any) {
-                  console.error("[generate] Background timeline generation failed:", timelineErr?.message ?? timelineErr);
-                }
-              }
-            } catch (saveErr) {
-              console.error("[generate] Failed to save documents:", saveErr);
-            }
-          })();
-        });
+            })();
+          });
+        }
       }
 
       stopHeartbeat();
       console.log(`[generate] sending done event at ${new Date().toISOString()}`);
       send({ type: "done", provider: settings.provider });
-      // Close the stream — fires the 'finish' event once fully flushed, triggering background work.
       res.end();
     } catch (err: unknown) {
       stopHeartbeat();
@@ -1431,8 +1428,8 @@ function buildPlaceholderData(projectData: GenerateRequest, aiArrays: Record<str
     sponsor_name: sponsor?.name ?? "",
     sponsor_role: sponsor?.role ?? "",
     generated_date: new Date().toLocaleDateString("en-GB"),
-    flipside_team: projectData.flipsideStakeholders.map((s) => ({ name: s.name, role: s.role })),
-    client_team:   projectData.clientStakeholders.map((s) => ({ name: s.name, role: s.role })),
+    flipside_team: projectData.flipsideStakeholders.map((s: { name: string; role: string; allocation?: number }) => ({ name: s.name, role: s.role, allocation: s.allocation ?? 100 })),
+    client_team:   projectData.clientStakeholders.map((s: { name: string; role: string; allocation?: number }) => ({ name: s.name, role: s.role, allocation: s.allocation ?? 100 })),
     milestones:    (projectData.billingMilestones ?? []).map((m: Record<string, unknown>) => ({
       stage:      m.stage ?? "",
       percentage: m.percentage ?? "",
@@ -1470,10 +1467,18 @@ function buildPlaceholderArrayPrompt(
     lines.push(`Sponsor: ${sponsor.name} (${sponsor.role})`);
   }
   if (projectData.flipsideStakeholders?.length) {
-    lines.push(`Delivery Team: ${projectData.flipsideStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+    const team = projectData.flipsideStakeholders.map((s: { name: string; role: string; allocation?: number }) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}%` : "";
+      return `${s.name} (${s.role}${alloc})`;
+    }).join(", ");
+    lines.push(`Delivery Team: ${team}`);
   }
   if (projectData.clientStakeholders?.length) {
-    lines.push(`Client Stakeholders: ${projectData.clientStakeholders.map((s) => `${s.name} (${s.role})`).join(", ")}`);
+    const team = projectData.clientStakeholders.map((s: { name: string; role: string; allocation?: number }) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}%` : "";
+      return `${s.name} (${s.role}${alloc})`;
+    }).join(", ");
+    lines.push(`Client Stakeholders: ${team}`);
   }
   if (projectData.billingMilestones?.length) {
     lines.push(`Billing Milestones: ${projectData.billingMilestones.map((m: Record<string, unknown>) => `${m.stage} ${m.percentage}% by ${m.date}`).join(", ")}`);
@@ -1774,12 +1779,16 @@ function buildUserPrompt(data: GenerateRequest): string {
     ...data.billingMilestones.map((m) => `  - ${m.stage}: ${m.percentage}% (${m.date})`),
     ``,
     `Flipside Stakeholders:`,
-    ...data.flipsideStakeholders.map((s) => `  - ${s.name} (${s.role})`),
+    ...data.flipsideStakeholders.map((s: { name: string; role: string; allocation?: number }) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}% allocation` : "";
+      return `  - ${s.name} (${s.role}${alloc})`;
+    }),
     ``,
     `Client Stakeholders:`,
-    ...data.clientStakeholders.map((s, i) =>
-      `  - ${s.name} (${s.role})${i === data.sponsorIndex ? " [Sponsor]" : ""}`
-    ),
+    ...data.clientStakeholders.map((s: { name: string; role: string; allocation?: number }, i: number) => {
+      const alloc = s.allocation != null && s.allocation < 100 ? ` — ${s.allocation}% allocation` : "";
+      return `  - ${s.name} (${s.role}${alloc})${i === data.sponsorIndex ? " [Sponsor]" : ""}`;
+    }),
     ...(sponsor ? [``, `Sponsor: ${sponsor.name} (${sponsor.role})`] : []),
   ];
 

@@ -87,8 +87,8 @@ export const projectsTable = pgTable("projects", {
   sponsorName: text("sponsor_name").notNull(),
   sponsorRole: text("sponsor_role").notNull(),
   billingMilestones: json("billing_milestones").$type<{ stage: string; percentage: number; date: string }[]>().notNull(),
-  flipsideStakeholders: json("flipside_stakeholders").$type<{ name: string; role: string }[]>().notNull(),
-  clientStakeholders: json("client_stakeholders").$type<{ name: string; role: string }[]>().notNull(),
+  flipsideStakeholders: json("flipside_stakeholders").$type<{ name: string; role: string; allocation?: number }[]>().notNull(),
+  clientStakeholders: json("client_stakeholders").$type<{ name: string; role: string; allocation?: number }[]>().notNull(),
   createdAt: text("created_at").notNull(),
   createdBy: text("created_by").notNull(),
   lastGeneratedAt: text("last_generated_at"),
@@ -150,6 +150,7 @@ export type Draft = typeof draftsTable.$inferSelect;
 const stakeholderSchema = z.object({
   name: z.string().min(1).max(100),
   role: z.string().min(1).max(100),
+  allocation: z.number().int().min(10).max(100).optional(),
 });
 
 const billingMilestoneSchema = z.object({
