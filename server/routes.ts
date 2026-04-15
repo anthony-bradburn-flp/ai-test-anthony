@@ -830,13 +830,13 @@ export async function registerRoutes(
     res.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code !== "ERR_STREAM_WRITE_AFTER_END") console.error("[generate] response stream error:", err);
     });
-    res.setTimeout(180_000, () => {
+    res.setTimeout(480_000, () => {
       console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — writableEnded: ${res.writableEnded}`);
       if (!res.writableEnded) {
         if (!res.headersSent) {
-          res.status(504).json({ error: "Generation timed out after 3 minutes. Please try again." });
+          res.status(504).json({ error: "Generation timed out after 8 minutes. Please try again." });
         } else {
-          try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 3 minutes." }) + "\n"); } catch { /* ignore */ }
+          try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 8 minutes." }) + "\n"); } catch { /* ignore */ }
           res.end();
         }
       }
