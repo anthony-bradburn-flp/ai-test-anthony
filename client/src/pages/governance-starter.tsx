@@ -516,7 +516,11 @@ export default function GovernanceStarterPage() {
               setIsGenerating(false);
               setGeneratingStage("");
             }, 0);
-            if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
+            if (projectId) {
+              queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "documents"] });
+              queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "supporting-docs"] });
+            }
             toast.success(`${docsReceived} document${docsReceived !== 1 ? "s" : ""} generated`);
             // Clean up draft on successful generation
             if (currentDraftId) {
