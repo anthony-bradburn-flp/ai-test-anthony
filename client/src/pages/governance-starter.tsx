@@ -166,6 +166,7 @@ export default function GovernanceStarterPage() {
         if (fd.projectSelectValue) setProjectSelectValue(fd.projectSelectValue as string);
         if (fd.generateTimeline !== undefined) setGenerateTimeline(!!fd.generateTimeline);
         if (fd.fields) form.reset(fd.fields as Parameters<typeof form.reset>[0]);
+        if (Array.isArray(fd.uploads)) setUploads(fd.uploads as Array<{ name: string; content: string; size: number }>);
         setCurrentDraftId(draft.id);
         toast.info("Draft loaded — continue where you left off.");
       })
@@ -453,6 +454,16 @@ export default function GovernanceStarterPage() {
     setGenerateError(null);
     setGeneratingStage("Preparing your request…");
     setGeneratingStart(Date.now());
+
+    // Hard client-side bailout — if the reader loop never exits (dead socket),
+    // force the spinner off after 7 minutes so the UI doesn't hang forever.
+    const bailoutTimer = setTimeout(() => {
+      console.warn("[generate] bailout timer fired — forcing isGenerating=false");
+      setIsGenerating(false);
+      setGeneratingStage("");
+      toast.warning("Generation is taking longer than expected. Check My Projects — documents may still be processing in the background.");
+    }, 7 * 60 * 1000);
+
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -545,6 +556,7 @@ export default function GovernanceStarterPage() {
         toast.error("Failed to generate", { description: msg });
       }
     } finally {
+      clearTimeout(bailoutTimer);
       generateAbortRef.current = null;
       console.log("[generate] finally block — setting isGenerating=false");
       setIsGenerating(false);
@@ -725,6 +737,7 @@ export default function GovernanceStarterPage() {
         projectSelectValue,
         generateTimeline,
         fields: values,
+        uploads,
       };
       let draft: { id: string };
       if (currentDraftId) {
