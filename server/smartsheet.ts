@@ -88,7 +88,7 @@ export async function generateTimelineTasks(
   if (settings.provider === "anthropic") {
     const key = getAnthropicKey();
     if (!key) throw new Error("Anthropic API key not configured");
-    const client = new Anthropic({ apiKey: key, timeout: 60_000 });
+    const client = new Anthropic({ apiKey: key, timeout: 300_000 });
     const msg = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
@@ -98,7 +98,7 @@ export async function generateTimelineTasks(
   } else {
     const key = getOpenAIKey();
     if (!key) throw new Error("OpenAI API key not configured");
-    const client = new OpenAI({ apiKey: key, timeout: 60_000 });
+    const client = new OpenAI({ apiKey: key, timeout: 300_000 });
     const resp = await client.chat.completions.create({
       model: "gpt-5.2",
       messages: [{ role: "user", content: prompt }],
