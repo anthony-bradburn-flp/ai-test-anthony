@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { RoleCombobox } from "@/components/role-combobox";
 import type { FullProject } from "@/components/project-form-view";
 
 const stakeholderSchema = z.object({
@@ -253,7 +254,9 @@ export function EditProjectModal({
                     <FormField control={form.control} name={`flipsideStakeholders.${i}.role`} render={({ field }) => (
                       <FormItem>
                         {i === 0 && <FormLabel className="text-xs text-muted-foreground">Role</FormLabel>}
-                        <FormControl><Input placeholder="Role" {...field} /></FormControl>
+                        <FormControl>
+                          <RoleCombobox value={field.value} onChange={field.onChange} />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )} />
@@ -304,7 +307,9 @@ export function EditProjectModal({
                     <FormField control={form.control} name={`clientStakeholders.${i}.role`} render={({ field }) => (
                       <FormItem>
                         {i === 0 && <FormLabel className="text-xs text-muted-foreground">Role</FormLabel>}
-                        <FormControl><Input placeholder="Role" {...field} /></FormControl>
+                        <FormControl>
+                          <RoleCombobox value={field.value} onChange={field.onChange} />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )} />

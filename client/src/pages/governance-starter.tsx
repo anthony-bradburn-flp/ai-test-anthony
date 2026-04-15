@@ -34,6 +34,7 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { toast } from "sonner";
+import { RoleCombobox } from "@/components/role-combobox";
 
 const stakeholderSchema = z.object({
   name: z.string().min(1, "Please enter a name"),
@@ -1292,9 +1293,9 @@ export default function GovernanceStarterPage() {
                                 Role <span className="text-destructive font-extrabold ml-1">*</span>
                               </FormLabel>
                               <FormControl>
-                                <Input
-                                  placeholder="Role"
-                                  {...field}
+                                <RoleCombobox
+                                  value={field.value}
+                                  onChange={field.onChange}
                                   disabled={isRequiredRole}
                                 />
                               </FormControl>
@@ -1418,7 +1419,10 @@ export default function GovernanceStarterPage() {
                               Role <span className="text-destructive font-extrabold ml-1">*</span>
                             </FormLabel>
                             <FormControl>
-                              <Input placeholder="Role" {...field} />
+                              <RoleCombobox
+                                value={field.value}
+                                onChange={field.onChange}
+                              />
                             </FormControl>
                             <FormMessage className="text-xs" />
                           </FormItem>
