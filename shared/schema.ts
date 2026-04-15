@@ -167,7 +167,7 @@ export const generateRequestSchema = z.object({
   value:                z.string().min(1).max(50),
   startDate:            z.string().min(1).max(20),
   endDate:              z.string().min(1).max(20),
-  summary:              z.string().min(1).max(5000),
+  summary:              z.string().min(1).max(20000),
   billingMilestones:    z.array(billingMilestoneSchema).min(1).max(20),
   flipsideStakeholders: z.array(stakeholderSchema).min(1).max(20),
   clientStakeholders:   z.array(stakeholderSchema).min(1).max(20),
