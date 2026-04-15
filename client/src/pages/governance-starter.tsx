@@ -762,23 +762,25 @@ export default function GovernanceStarterPage() {
               Capture project information, stakeholders, and documentation needs.
             </p>
           </div>
-          <div className="flex gap-2 flex-wrap justify-end">
-            <Link href="/my-projects">
-              <Button variant="outline" className="font-bold">My Projects</Button>
-            </Link>
-            {user && (user.role === "admin" || user.role === "manager") ? (
-              <Link href="/admin">
-                <Button variant="outline" className="font-bold">Admin</Button>
+          <div className="flex flex-col items-end gap-1.5 sm:gap-2">
+            <div className="flex gap-1.5 sm:gap-2 flex-wrap justify-end">
+              <Link href="/my-projects">
+                <Button size="sm" variant="outline" className="font-bold sm:text-sm">My Projects</Button>
               </Link>
-            ) : (
-              <Button variant="outline" className="font-bold" onClick={() => toast.error("Only admin and manager users can access the admin section.")}>
-                Admin
-              </Button>
-            )}
-            <Link href="/account">
-              <Button variant="outline" className="font-bold">My Account</Button>
-            </Link>
-            <Button variant="ghost" className="font-bold" onClick={() => logout.mutate()} disabled={logout.isPending}>
+              {user && (user.role === "admin" || user.role === "manager") ? (
+                <Link href="/admin">
+                  <Button size="sm" variant="outline" className="font-bold sm:text-sm">Admin</Button>
+                </Link>
+              ) : (
+                <Button size="sm" variant="outline" className="font-bold sm:text-sm" onClick={() => toast.error("Only admin and manager users can access the admin section.")}>
+                  Admin
+                </Button>
+              )}
+              <Link href="/account">
+                <Button size="sm" variant="outline" className="font-bold sm:text-sm">My Account</Button>
+              </Link>
+            </div>
+            <Button size="sm" variant="ghost" className="font-bold sm:text-sm" onClick={() => logout.mutate()} disabled={logout.isPending}>
               {logout.isPending ? "Signing out…" : "Sign Out"}
             </Button>
           </div>
@@ -1760,15 +1762,19 @@ export default function GovernanceStarterPage() {
             )}
             <div className="grid gap-3">
               {sheetRefModal.onUseExisting && (
-                <Button className="w-full font-bold" onClick={sheetRefModal.onUseExisting}>
-                  Load &amp; update existing project
-                  <span className="ml-2 text-xs font-normal opacity-70">— generates against the existing project</span>
-                </Button>
+                <div>
+                  <Button className="w-full font-bold" onClick={sheetRefModal.onUseExisting}>
+                    Load &amp; update existing project
+                  </Button>
+                  <p className="text-xs text-muted-foreground text-center mt-1">generates against the existing project</p>
+                </div>
               )}
-              <Button variant={sheetRefModal.onUseExisting ? "outline" : "default"} className="w-full font-bold" onClick={sheetRefModal.onCreateNew}>
-                Create new project anyway
-                <span className="ml-2 text-xs font-normal opacity-70">— creates a duplicate with this ref</span>
-              </Button>
+              <div>
+                <Button variant={sheetRefModal.onUseExisting ? "outline" : "default"} className="w-full font-bold" onClick={sheetRefModal.onCreateNew}>
+                  Create new project anyway
+                </Button>
+                <p className="text-xs text-muted-foreground text-center mt-1">creates a duplicate with this ref</p>
+              </div>
               <Button variant="ghost" className="w-full" onClick={sheetRefModal.onCancel}>Cancel</Button>
             </div>
           </div>
