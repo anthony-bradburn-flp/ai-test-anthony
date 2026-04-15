@@ -542,6 +542,8 @@ export default function GovernanceStarterPage() {
             // open while server-side background tasks run.
             reader.cancel().catch(() => {});
             return;
+          } else if (event.type === "heartbeat") {
+            // keep-alive ping from server — ignore
           } else if (event.type === "error") {
             throw new Error((event.error as string) ?? "Generation failed");
           }
