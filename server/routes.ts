@@ -833,6 +833,8 @@ export async function registerRoutes(
     res.setTimeout(480_000, () => {
       console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — writableEnded: ${res.writableEnded}`);
       if (!res.writableEnded) {
+        // Headers not yet sent: safe to send an HTTP status code.
+        // Headers already sent: we're mid-stream and must write an error event to the body instead.
         if (!res.headersSent) {
           res.status(504).json({ error: "Generation timed out after 8 minutes. Please try again." });
         } else {
