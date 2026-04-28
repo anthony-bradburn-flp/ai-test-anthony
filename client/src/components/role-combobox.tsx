@@ -107,8 +107,11 @@ export function RoleCombobox({
       <PopoverContent
         className="p-0 w-[220px]"
         align="start"
+        // Prevent the popover stealing focus from the text input on open
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
+        {/* shouldFilter=false: filtering is done manually via `filtered`; enabling Command's
+            built-in filter would double-filter and break free-text input matching. */}
         <Command shouldFilter={false}>
           <CommandList>
             {filtered.length === 0 ? (
