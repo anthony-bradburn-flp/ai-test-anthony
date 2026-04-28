@@ -299,6 +299,7 @@ export async function upsertTimeline(
   const existingRows: any[] = sheet.rows ?? [];
   if (existingRows.length > 0) {
     const rowIds = existingRows.map((r: any) => r.id);
+    // Smartsheet enforces a per-request row limit; 450 is a safe batch size below that threshold.
     for (let i = 0; i < rowIds.length; i += 450) {
       await client.sheets.deleteRows({
         sheetId: numericSheetId,
