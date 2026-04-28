@@ -457,14 +457,18 @@ export default function GovernanceStarterPage() {
     setGeneratingStage("Preparing your request…");
     setGeneratingStart(Date.now());
 
-    // Hard client-side bailout — if the reader loop never exits (dead socket),
-    // force the spinner off after 7 minutes so the UI doesn't hang forever.
+    // Soft warning at 7 min: generation is slow but still running — keep spinner up.
+    // Hard cutoff at 15 min: assume the connection is dead and force the UI clear.
+    const warnTimer = setTimeout(() => {
+      console.warn("[generate] warn timer fired — generation still running after 7m");
+      toast.warning("Still generating — this is taking longer than usual. The spinner will stay until it completes.");
+    }, 7 * 60 * 1000);
     const bailoutTimer = setTimeout(() => {
-      console.warn("[generate] bailout timer fired — forcing isGenerating=false");
+      console.warn("[generate] bailout timer fired — forcing isGenerating=false after 15m");
       setIsGenerating(false);
       setGeneratingStage("");
-      toast.warning("Generation is taking longer than expected. Check My Projects — documents may still be processing in the background.");
-    }, 7 * 60 * 1000);
+      toast.warning("Generation timed out after 15 minutes. Check My Projects — documents may have been saved in the background.");
+    }, 15 * 60 * 1000);
 
     try {
       const res = await fetch("/api/generate", {
@@ -560,6 +564,7 @@ export default function GovernanceStarterPage() {
         toast.error("Failed to generate", { description: msg });
       }
     } finally {
+      clearTimeout(warnTimer);
       clearTimeout(bailoutTimer);
       generateAbortRef.current = null;
       console.log("[generate] finally block — setting isGenerating=false");
