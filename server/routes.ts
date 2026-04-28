@@ -869,6 +869,10 @@ export async function registerRoutes(
     res.setHeader("Content-Type", "application/x-ndjson");
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
+    // Tell NGINX (if present) not to buffer this response — without this,
+    // NGINX holds all writes and flushes them at once on res.end(), which
+    // defeats streaming and makes the spinner run for the full generation duration.
+    res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
     // Disable Nagle's algorithm so each res.write() is sent to the client immediately
     if (res.socket) res.socket.setNoDelay(true);
