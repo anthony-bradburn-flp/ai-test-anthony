@@ -363,7 +363,9 @@ function buildGovernanceTable(rows: CadenceRow[]): Table {
 // ─── DOCX assembler ───────────────────────────────────────────────────────────
 
 async function buildSummaryPackDocx(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
-  const { weeks, step } = getWeekStarts(projectData.startDate, projectData.endDate);
+  let { weeks, step } = getWeekStarts(projectData.startDate, projectData.endDate);
+  // Fallback: if dates are equal or reversed, show a single-week column rather than crashing
+  if (weeks.length === 0) weeks = [new Date(projectData.startDate)];
 
   const dateRange = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${new Date(projectData.endDate).getFullYear()}`;
 
@@ -512,7 +514,20 @@ export async function generateSummaryPack(
 
   // Strip any accidental markdown fences the AI might add despite instructions
   const cleaned = rawJson.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-  const data: SummaryData = JSON.parse(cleaned);
+
+  let data: SummaryData;
+  try {
+    data = JSON.parse(cleaned);
+  } catch {
+    // Include the first 200 chars of the raw response so the error log is actionable
+    throw new Error(`AI returned non-JSON for summary pack: ${cleaned.slice(0, 200)}`);
+  }
+
+  // Guard: AI may return valid JSON with missing or null array fields
+  if (!Array.isArray(data.phases) || !Array.isArray(data.assumptions) ||
+      !Array.isArray(data.risks) || !Array.isArray(data.governance_cadence)) {
+    throw new Error("AI summary pack response is missing required array fields (phases/assumptions/risks/governance_cadence)");
+  }
 
   const buffer = await buildSummaryPackDocx(data, projectData);
 

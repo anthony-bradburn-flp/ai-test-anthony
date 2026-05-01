@@ -70,16 +70,19 @@ app.use(
   }),
 );
 
+// Default body limit for all routes — small enough to prevent DoS via oversized payloads.
+// Routes that accept file uploads (templates, supporting docs, generate) apply their own
+// higher limit inline rather than opening 50 MB globally.
 app.use(
   express.json({
-    limit: "50mb",
+    limit: "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "50mb" }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
