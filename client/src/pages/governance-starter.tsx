@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
@@ -64,8 +65,12 @@ const formSchema = z.object({
   flipsideStakeholders: z.array(stakeholderSchema).min(2, "At least Account Lead and Project Manager are required"),
   clientStakeholders: z.array(stakeholderSchema).min(1, "Please add at least one stakeholder"),
   sponsorIndex: z.number().min(0, "Please select exactly one Sponsor."),
-  docsRequired: z.array(z.string()).min(1, "Please select at least one required document."),
+  docsRequired: z.array(z.string()).min(0),
+  simplifiedMode: z.boolean().optional(),
 }).superRefine((data, ctx) => {
+  if (!data.simplifiedMode && (!data.docsRequired || data.docsRequired.length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Please select at least one required document.", path: ["docsRequired"] });
+  }
   if (data.startDate && data.endDate) {
     if (new Date(data.startDate) > new Date(data.endDate)) {
       ctx.addIssue({
@@ -344,9 +349,10 @@ export default function GovernanceStarterPage() {
 
   // Auto-populate docsRequired from the package when project type changes
   // Only ticks AI-generate docs — passthrough docs are included automatically at generate time
-  const watchedProjectType = form.watch("projectType");
-  const watchedProjectValue = parseFloat(form.watch("value") || "0");
+  const watchedProjectType    = form.watch("projectType");
+  const watchedProjectValue   = parseFloat(form.watch("value") || "0");
   const watchedBillingMilestones = form.watch("billingMilestones");
+  const watchedSimplifiedMode = form.watch("simplifiedMode");
 
   // Cascade project value change → recalculate all milestone £ values from their percentages
   useEffect(() => {
@@ -442,7 +448,8 @@ export default function GovernanceStarterPage() {
       flipsideStakeholders: values.flipsideStakeholders,
       clientStakeholders: values.clientStakeholders,
       sponsorIndex: values.sponsorIndex,
-      docsRequired: values.docsRequired,
+      docsRequired: values.simplifiedMode ? ["Project Summary Pack"] : values.docsRequired,
+      simplifiedMode: values.simplifiedMode ?? false,
       supportingDocs: uploads.map((u) => ({ name: u.name, content: u.content })),
       projectId,
       versionMode,
@@ -1615,20 +1622,53 @@ export default function GovernanceStarterPage() {
                   )}
                 </div>
 
+                {/* Simplified mode toggle — switches to a 2-3 page summary pack instead of full docs */}
+                <FormField
+                  control={form.control}
+                  name="simplifiedMode"
+                  render={({ field }) => (
+                    <FormItem className="col-span-12">
+                      <div className="flex items-start gap-3 rounded-xl border border-border bg-background p-3 px-4">
+                        <Switch
+                          id="simplified-mode"
+                          checked={field.value ?? false}
+                          onCheckedChange={field.onChange}
+                          className="mt-0.5"
+                        />
+                        <div>
+                          <Label htmlFor="simplified-mode" className="text-sm font-semibold cursor-pointer">
+                            Simplified summary pack
+                          </Label>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Generates a concise 2–3 page client-facing document: phase overview, timeline, assumptions, governance cadence, and key risks. Replaces the full document set.
+                          </p>
+                        </div>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+
                 <FormField
                   control={form.control}
                   name="docsRequired"
                   render={() => (
                     <FormItem className="col-span-12">
                       <FormLabel className="flex justify-between font-semibold">
-                        <span>Documents Required <span className="text-destructive font-extrabold ml-1">*</span></span>
+                        <span>
+                          Documents Required
+                          {!watchedSimplifiedMode && <span className="text-destructive font-extrabold ml-1">*</span>}
+                        </span>
                       </FormLabel>
-                      {watchedProjectType && (
+                      {watchedSimplifiedMode ? (
+                        <p className="text-xs text-muted-foreground mt-0.5 italic">
+                          Document selection is not required in simplified mode — the summary pack is generated automatically.
+                        </p>
+                      ) : watchedProjectType && (
                         <p className="text-xs text-muted-foreground mt-0.5">
                           Select the documents for the AI to generate for this project.
                         </p>
                       )}
-                      <div className="mt-1.5 grid gap-2.5 md:grid-cols-2">
+                      <div className={`mt-1.5 grid gap-2.5 md:grid-cols-2 ${watchedSimplifiedMode ? "opacity-30 pointer-events-none select-none" : ""}`}>
                         {(availableTemplates ?? []).filter((t) => t.generateMode !== "passthrough").map((tpl) => (
                           <FormField
                             key={tpl.id}

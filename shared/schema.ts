@@ -174,6 +174,7 @@ export const generateRequestSchema = z.object({
   clientStakeholders:   z.array(stakeholderSchema).min(1).max(20),
   sponsorIndex:         z.number().int().min(0).max(19),
   docsRequired:         z.array(z.string().min(1).max(100)).min(1).max(10),
+  simplifiedMode:       z.boolean().optional(),
 });
 
 export type GenerateRequest = z.infer<typeof generateRequestSchema>;
