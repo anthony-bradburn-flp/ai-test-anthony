@@ -2,18 +2,24 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  WidthType, AlignmentType, BorderStyle, HeadingLevel,
+  WidthType, AlignmentType, BorderStyle, PageOrientation, ShadingType,
+  type IBorderOptions,
 } from "docx";
-import type { AiSettings } from "@shared/schema";
+import { execFile } from "child_process";
+import { promises as fsp } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { randomBytes } from "crypto";
+import type { AiSettings } from "./storage";
 import type { GenerateRequest } from "@shared/schema";
 
-// ─── Brand tokens ────────────────────────────────────────────────────────────
-const ACCENT    = "C41E3A"; // Flipside red
-const DARK      = "1F2937"; // near-black headings/table headers
-const MID       = "6B7280"; // secondary / muted text
-const RULE_COL  = "E5E7EB"; // thin border colour
-const ALT_ROW   = "F9FAFB"; // alternating table row background
-const WHITE     = "FFFFFF";
+// ─── Brand tokens ─────────────────────────────────────────────────────────────
+const ACCENT   = "C41E3A"; // Flipside red — active phase bars, sign-off text, accent rule
+const DARK     = "111827"; // Near-black — table headers
+const MID      = "6B7280"; // Secondary / muted text
+const RULE_COL = "E5E7EB"; // Thin cell border colour
+const ALT_ROW  = "F9FAFB"; // Alternating table row background
+const WHITE    = "FFFFFF";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface Phase {
@@ -34,20 +40,20 @@ interface CadenceRow {
 }
 
 interface Risk {
-  risk:        string;
-  mitigation:  string;
+  risk:       string;
+  mitigation: string;
 }
 
 interface SummaryData {
-  intro:               string;
-  phases:              Phase[];
-  assumptions:         string[];
-  governance_cadence:  CadenceRow[];
-  risks:               Risk[];
-  next_step:           string;
+  intro:              string;
+  phases:             Phase[];
+  assumptions:        string[];
+  governance_cadence: CadenceRow[];
+  risks:              Risk[];
+  next_step:          string;
 }
 
-// ─── AI Prompt ───────────────────────────────────────────────────────────────
+// ─── AI Prompt ────────────────────────────────────────────────────────────────
 function buildSummaryPrompt(
   projectData: GenerateRequest,
   supportingDocs: Array<{ name: string; content: string }>,
@@ -171,50 +177,54 @@ function phaseActive(phase: Phase, weekStart: Date, step: number): boolean {
   return weekStart <= pe && we >= ps;
 }
 
-// ─── Cell/border helpers ──────────────────────────────────────────────────────
+// ─── Border / shading helpers ─────────────────────────────────────────────────
 
-function thinBorder() {
+function thinBorder(): IBorderOptions {
   return { style: BorderStyle.SINGLE, size: 1, color: RULE_COL };
 }
 
-function noBorder() {
+function noBorder(): IBorderOptions {
   return { style: BorderStyle.NONE, size: 0, color: WHITE };
 }
 
-function allBorders(fn: () => object) {
+function allBorders(fn: () => IBorderOptions): { top: IBorderOptions; bottom: IBorderOptions; left: IBorderOptions; right: IBorderOptions } {
   const b = fn();
   return { top: b, bottom: b, left: b, right: b };
 }
 
-function shading(fill: string) {
-  // Use 'solid' as a string — docx v9 ShadingType enum evaluates to these strings
-  return { fill, type: "solid" as const };
+// ShadingType.CLEAR is the correct OOXML value for "use fill as the background colour".
+// The legacy "solid" val fills with the foreground *color* attribute (defaults to black)
+// which is why tables previously appeared entirely black.
+function cellShading(fill: string) {
+  return { fill, type: ShadingType.CLEAR };
 }
 
 // ─── Table builders ───────────────────────────────────────────────────────────
 
 function buildGanttTable(phases: Phase[], weeks: Date[], step: number): Table {
   const N = weeks.length;
-  // Phase name column 28%, week columns split remaining 72%
-  const weekPct = Math.max(1, Math.floor(72 / N));
+  // Phase name column 26%, week columns split remaining 74%
+  const weekPct = Math.max(1, Math.floor(74 / N));
 
   const headerCells = [
     new TableCell({
-      shading: shading(DARK),
+      shading: cellShading(DARK),
       borders: allBorders(thinBorder),
-      width: { size: 28, type: WidthType.PERCENTAGE },
+      width: { size: 26, type: WidthType.PERCENTAGE },
       children: [new Paragraph({
-        children: [new TextRun({ text: "Phase", bold: true, color: WHITE, size: 14 })],
+        children: [new TextRun({ text: "Phase", bold: true, color: WHITE, size: 16 })],
+        spacing: { before: 40, after: 40 },
       })],
     }),
     ...weeks.map((w) =>
       new TableCell({
-        shading: shading(DARK),
+        shading: cellShading(DARK),
         borders: allBorders(thinBorder),
         width: { size: weekPct, type: WidthType.PERCENTAGE },
         children: [new Paragraph({
           alignment: AlignmentType.CENTER,
           children: [new TextRun({ text: fmtWeek(w), bold: true, color: WHITE, size: 12 })],
+          spacing: { before: 40, after: 40 },
         })],
       })
     ),
@@ -224,20 +234,21 @@ function buildGanttTable(phases: Phase[], weeks: Date[], step: number): Table {
     new TableRow({
       children: [
         new TableCell({
-          shading: shading(ALT_ROW),
+          shading: cellShading(ALT_ROW),
           borders: allBorders(thinBorder),
-          width: { size: 28, type: WidthType.PERCENTAGE },
+          width: { size: 26, type: WidthType.PERCENTAGE },
           children: [new Paragraph({
-            children: [new TextRun({ text: phase.name, size: 16 })],
+            children: [new TextRun({ text: phase.name, size: 16, color: DARK })],
+            spacing: { before: 60, after: 60 },
           })],
         }),
         ...weeks.map((w) => {
           const active = phaseActive(phase, w, step);
           return new TableCell({
-            shading: shading(active ? ACCENT : WHITE),
+            shading: cellShading(active ? ACCENT : WHITE),
             borders: allBorders(thinBorder),
             width: { size: weekPct, type: WidthType.PERCENTAGE },
-            children: [new Paragraph({ children: [] })],
+            children: [new Paragraph({ children: [], spacing: { before: 60, after: 60 } })],
           });
         }),
       ],
@@ -251,17 +262,18 @@ function buildGanttTable(phases: Phase[], weeks: Date[], step: number): Table {
 }
 
 function buildPhaseDetailTable(phases: Phase[]): Table {
-  const COLS = [20, 15, 35, 30];
+  const COLS = [18, 14, 36, 32];
   const HEADS = ["Phase", "Dates", "Key Activities", "Deliverables & Review"];
 
   const headerRow = new TableRow({
     children: HEADS.map((h, i) =>
       new TableCell({
-        shading: shading(DARK),
+        shading: cellShading(DARK),
         borders: allBorders(thinBorder),
         width: { size: COLS[i], type: WidthType.PERCENTAGE },
         children: [new Paragraph({
           children: [new TextRun({ text: h, bold: true, color: WHITE, size: 16 })],
+          spacing: { before: 60, after: 60 },
         })],
       })
     ),
@@ -274,12 +286,12 @@ function buildPhaseDetailTable(phases: Phase[]): Table {
     const fill = idx % 2 === 0 ? WHITE : ALT_ROW;
 
     const activityParagraphs = phase.key_activities.map((a) =>
-      new Paragraph({ children: [new TextRun({ text: `• ${a}`, size: 16 })], spacing: { after: 40 } })
+      new Paragraph({ children: [new TextRun({ text: `• ${a}`, size: 16, color: DARK })], spacing: { after: 40 } })
     );
 
     const deliverableParagraphs = [
       ...phase.deliverables.map((d) =>
-        new Paragraph({ children: [new TextRun({ text: `• ${d}`, size: 16 })], spacing: { after: 40 } })
+        new Paragraph({ children: [new TextRun({ text: `• ${d}`, size: 16, color: DARK })], spacing: { after: 40 } })
       ),
       ...(phase.sign_off ? [new Paragraph({
         children: [new TextRun({ text: `Sign-off: ${phase.sign_off}`, bold: true, color: ACCENT, size: 16 })],
@@ -290,25 +302,31 @@ function buildPhaseDetailTable(phases: Phase[]): Table {
     return new TableRow({
       children: [
         new TableCell({
-          shading: shading(fill),
+          shading: cellShading(fill),
           borders: allBorders(thinBorder),
           width: { size: COLS[0], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({ children: [new TextRun({ text: phase.name, bold: true, size: 16 })] })],
+          children: [new Paragraph({
+            children: [new TextRun({ text: phase.name, bold: true, size: 16, color: DARK })],
+            spacing: { before: 60, after: 60 },
+          })],
         }),
         new TableCell({
-          shading: shading(fill),
+          shading: cellShading(fill),
           borders: allBorders(thinBorder),
           width: { size: COLS[1], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({ children: [new TextRun({ text: dateStr, size: 16, color: MID })] })],
+          children: [new Paragraph({
+            children: [new TextRun({ text: dateStr, size: 15, color: MID })],
+            spacing: { before: 60, after: 60 },
+          })],
         }),
         new TableCell({
-          shading: shading(fill),
+          shading: cellShading(fill),
           borders: allBorders(thinBorder),
           width: { size: COLS[2], type: WidthType.PERCENTAGE },
           children: activityParagraphs.length ? activityParagraphs : [new Paragraph({ children: [] })],
         }),
         new TableCell({
-          shading: shading(fill),
+          shading: cellShading(fill),
           borders: allBorders(thinBorder),
           width: { size: COLS[3], type: WidthType.PERCENTAGE },
           children: deliverableParagraphs.length ? deliverableParagraphs : [new Paragraph({ children: [] })],
@@ -330,11 +348,12 @@ function buildGovernanceTable(rows: CadenceRow[]): Table {
   const headerRow = new TableRow({
     children: HEADS.map((h, i) =>
       new TableCell({
-        shading: shading(DARK),
+        shading: cellShading(DARK),
         borders: allBorders(thinBorder),
         width: { size: COLS[i], type: WidthType.PERCENTAGE },
         children: [new Paragraph({
           children: [new TextRun({ text: h, bold: true, color: WHITE, size: 16 })],
+          spacing: { before: 60, after: 60 },
         })],
       })
     ),
@@ -345,10 +364,13 @@ function buildGovernanceTable(rows: CadenceRow[]): Table {
     return new TableRow({
       children: [row.cadence, row.who, row.format, row.purpose].map((text, i) =>
         new TableCell({
-          shading: shading(fill),
+          shading: cellShading(fill),
           borders: allBorders(thinBorder),
           width: { size: COLS[i], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({ children: [new TextRun({ text, size: 16 })] })],
+          children: [new Paragraph({
+            children: [new TextRun({ text, size: 16, color: DARK })],
+            spacing: { before: 60, after: 60 },
+          })],
         })
       ),
     });
@@ -360,118 +382,236 @@ function buildGovernanceTable(rows: CadenceRow[]): Table {
   });
 }
 
+function buildRisksTable(risks: Risk[]): Table {
+  const COLS = [50, 50];
+  const HEADS = ["Risk", "Mitigation"];
+
+  const headerRow = new TableRow({
+    children: HEADS.map((h, i) =>
+      new TableCell({
+        shading: cellShading(DARK),
+        borders: allBorders(thinBorder),
+        width: { size: COLS[i], type: WidthType.PERCENTAGE },
+        children: [new Paragraph({
+          children: [new TextRun({ text: h, bold: true, color: WHITE, size: 16 })],
+          spacing: { before: 60, after: 60 },
+        })],
+      })
+    ),
+  });
+
+  const dataRows = risks.map((r, idx) => {
+    const fill = idx % 2 === 0 ? WHITE : ALT_ROW;
+    return new TableRow({
+      children: [r.risk, r.mitigation].map((text, i) =>
+        new TableCell({
+          shading: cellShading(fill),
+          borders: allBorders(thinBorder),
+          width: { size: COLS[i], type: WidthType.PERCENTAGE },
+          children: [new Paragraph({
+            children: [new TextRun({ text, size: 16, color: i === 0 ? DARK : MID })],
+            spacing: { before: 60, after: 60 },
+          })],
+        })
+      ),
+    });
+  });
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [headerRow, ...dataRows],
+  });
+}
+
+// ─── LibreOffice PDF conversion ───────────────────────────────────────────────
+
+async function convertToPdf(docxBuf: Buffer): Promise<Buffer> {
+  const id = randomBytes(8).toString("hex");
+  const tmpDocx = join(tmpdir(), `spack_${id}.docx`);
+  const tmpPdf  = join(tmpdir(), `spack_${id}.pdf`);
+  try {
+    await fsp.writeFile(tmpDocx, docxBuf);
+    await new Promise<void>((resolve, reject) =>
+      execFile(
+        "libreoffice",
+        ["--headless", "--convert-to", "pdf", "--outdir", tmpdir(), tmpDocx],
+        { timeout: 60_000 },
+        (err) => (err ? reject(err) : resolve()),
+      ),
+    );
+    return await fsp.readFile(tmpPdf);
+  } finally {
+    await Promise.allSettled([fsp.unlink(tmpDocx), fsp.unlink(tmpPdf)]);
+  }
+}
+
 // ─── DOCX assembler ───────────────────────────────────────────────────────────
 
 async function buildSummaryPackDocx(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
   let { weeks, step } = getWeekStarts(projectData.startDate, projectData.endDate);
-  // Fallback: if dates are equal or reversed, show a single-week column rather than crashing
   if (weeks.length === 0) weeks = [new Date(projectData.startDate)];
 
-  const dateRange = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${new Date(projectData.endDate).getFullYear()}`;
+  const firstYear  = new Date(projectData.startDate).getFullYear();
+  const lastYear   = new Date(projectData.endDate).getFullYear();
+  const yearSuffix = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
+  const dateRange  = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
 
-  // ── Page 1: Title + intro + Gantt ─────────────────────────────────────────
+  const sponsor    = projectData.clientStakeholders[projectData.sponsorIndex];
+  const flipTeam   = (projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
+    .map((s) => `${s.name} (${s.role})`)
+    .join("  ·  ");
+
+  // ── Page 1: Title + intro + Gantt ──────────────────────────────────────────
   const p1: (Paragraph | Table)[] = [
-    new Paragraph({
-      children: [new TextRun({ text: `${projectData.projectName} — Project Summary`, bold: true, color: ACCENT, size: 52 })],
-      spacing: { after: 100 },
-    }),
-    new Paragraph({
-      children: [new TextRun({
-        text: `${projectData.client} × Flipside  |  ${projectData.projectType}  |  ${new Date(projectData.startDate).toLocaleDateString("en-GB", { month: "long", year: "numeric" })}`,
-        color: MID, size: 18,
-      })],
-      spacing: { after: 200 },
-    }),
-    // Divider: a table with a single bold top border acts as a clean horizontal rule
+    // Red accent bar at top (thin table with only a top border)
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       borders: {
-        top:     { style: BorderStyle.THICK, size: 4, color: ACCENT },
-        bottom:  noBorder(),
-        left:    noBorder(),
-        right:   noBorder(),
-        insideH: noBorder(),
-        insideV: noBorder(),
+        top:              { style: BorderStyle.THICK, size: 6, color: ACCENT },
+        bottom:           noBorder(),
+        left:             noBorder(),
+        right:            noBorder(),
+        insideHorizontal: noBorder(),
+        insideVertical:   noBorder(),
       },
       rows: [new TableRow({ children: [new TableCell({ borders: allBorders(noBorder), children: [new Paragraph({ children: [] })] })] })],
     }),
     new Paragraph({
-      children: [new TextRun({ text: data.intro, size: 20, color: DARK })],
-      spacing: { before: 200, after: 360 },
+      children: [new TextRun({ text: `${projectData.projectName}`, bold: true, color: DARK, size: 48 })],
+      spacing: { before: 160, after: 60 },
     }),
     new Paragraph({
+      children: [new TextRun({ text: "Project Summary Pack", color: ACCENT, size: 28, bold: true })],
+      spacing: { after: 60 },
+    }),
+    new Paragraph({
+      children: [
+        new TextRun({ text: `${projectData.client}  ×  Flipside`, color: MID, size: 18 }),
+        new TextRun({ text: `   |   ${projectData.projectType}   |   ${projectData.projectSize}`, color: MID, size: 18 }),
+      ],
+      spacing: { after: 200 },
+    }),
+    new Paragraph({
+      children: [new TextRun({ text: data.intro, size: 18, color: DARK })],
+      spacing: { before: 80, after: 280 },
+    }),
+
+    // Gantt heading
+    new Paragraph({
       children: [new TextRun({ text: `Phase Overview  —  ${dateRange}`, bold: true, size: 22, color: DARK })],
-      spacing: { before: 80, after: 160 },
+      spacing: { before: 80, after: 140 },
     }),
     buildGanttTable(data.phases, weeks, step),
     // Legend
     new Paragraph({
-      children: [new TextRun({ text: "Active phase     Workshop     Sign-off milestone", size: 14, color: MID })],
-      spacing: { before: 100 },
+      children: [new TextRun({ text: "  Active phase  ", size: 14, color: MID })],
+      spacing: { before: 80 },
     }),
+
+    // Team / sponsor line at bottom of page 1
+    new Paragraph({
+      children: [
+        new TextRun({ text: "Flipside team: ", bold: true, size: 16, color: DARK }),
+        new TextRun({ text: flipTeam, size: 16, color: MID }),
+      ],
+      spacing: { before: 200 },
+    }),
+    ...(sponsor ? [new Paragraph({
+      children: [
+        new TextRun({ text: "Client sponsor: ", bold: true, size: 16, color: DARK }),
+        new TextRun({ text: `${sponsor.name} (${sponsor.role})`, size: 16, color: MID }),
+      ],
+      spacing: { after: 80 },
+    })] : []),
   ];
 
-  // ── Page 2: Phase detail ───────────────────────────────────────────────────
+  // ── Page 2: Phase detail ────────────────────────────────────────────────────
   const p2: (Paragraph | Table)[] = [
     new Paragraph({
       pageBreakBefore: true,
       children: [new TextRun({ text: "Phase detail — what each phase produces", bold: true, size: 26, color: DARK })],
-      spacing: { after: 200 },
+      spacing: { after: 180 },
     }),
     buildPhaseDetailTable(data.phases),
   ];
 
-  // ── Page 3: Assumptions + Governance + Risks ──────────────────────────────
+  // ── Page 3: Assumptions + Governance + Risks ────────────────────────────────
+  const assumptionsTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            shading: cellShading(DARK),
+            borders: allBorders(thinBorder),
+            children: [new Paragraph({
+              children: [new TextRun({ text: "Assumptions", bold: true, color: WHITE, size: 16 })],
+              spacing: { before: 60, after: 60 },
+            })],
+          }),
+        ],
+      }),
+      ...data.assumptions.map((a, idx) =>
+        new TableRow({
+          children: [
+            new TableCell({
+              shading: cellShading(idx % 2 === 0 ? WHITE : ALT_ROW),
+              borders: allBorders(thinBorder),
+              children: [new Paragraph({
+                children: [new TextRun({ text: `• ${a}`, size: 16, color: DARK })],
+                spacing: { before: 50, after: 50 },
+              })],
+            }),
+          ],
+        })
+      ),
+    ],
+  });
+
   const p3: (Paragraph | Table)[] = [
     new Paragraph({
       pageBreakBefore: true,
       children: [new TextRun({ text: "Assumptions", bold: true, size: 26, color: DARK })],
       spacing: { after: 160 },
     }),
-    ...data.assumptions.map((a) =>
-      new Paragraph({
-        bullet: { level: 0 },
-        children: [new TextRun({ text: a, size: 18 })],
-        spacing: { after: 60 },
-      })
-    ),
-    new Paragraph({ spacing: { after: 280 }, children: [] }),
+    assumptionsTable,
+    new Paragraph({ spacing: { after: 240 }, children: [] }),
 
     new Paragraph({
       children: [new TextRun({ text: "Governance & review cadence", bold: true, size: 26, color: DARK })],
       spacing: { after: 160 },
     }),
     buildGovernanceTable(data.governance_cadence),
-    new Paragraph({ spacing: { after: 280 }, children: [] }),
+    new Paragraph({ spacing: { after: 240 }, children: [] }),
 
     new Paragraph({
       children: [new TextRun({ text: "Key risks & mitigations", bold: true, size: 26, color: DARK })],
       spacing: { after: 160 },
     }),
-    ...data.risks.map((r) =>
-      new Paragraph({
-        bullet: { level: 0 },
-        children: [
-          new TextRun({ text: r.risk, size: 18 }),
-          new TextRun({ text: ` — ${r.mitigation}`, size: 18, color: MID }),
-        ],
-        spacing: { after: 80 },
-      })
-    ),
-    new Paragraph({ spacing: { after: 280 }, children: [] }),
+    buildRisksTable(data.risks),
+    new Paragraph({ spacing: { after: 240 }, children: [] }),
 
     new Paragraph({
       children: [
-        new TextRun({ text: "Next step: ", italic: true, size: 18, color: MID }),
-        new TextRun({ text: data.next_step, italic: true, bold: true, size: 18, color: MID }),
+        new TextRun({ text: "Next step:  ", bold: true, size: 18, color: DARK }),
+        new TextRun({ text: data.next_step, size: 18, color: MID }),
       ],
+      spacing: { after: 80 },
     }),
   ];
 
+  // A4 landscape: width=297mm=16838 twips, height=210mm=11906 twips
   const doc = new Document({
     sections: [{
       properties: {
-        page: { margin: { top: 1134, right: 1134, bottom: 1134, left: 1134 } },
+        page: {
+          size: {
+            orientation: PageOrientation.LANDSCAPE,
+            width: 16838,
+            height: 11906,
+          },
+          margin: { top: 720, right: 900, bottom: 720, left: 900 }, // ~0.5" top/bottom, ~0.625" sides
+        },
       },
       children: [...p1, ...p2, ...p3],
     }],
@@ -512,28 +652,26 @@ export async function generateSummaryPack(
     rawJson = response.choices[0]?.message?.content ?? "";
   }
 
-  // Strip any accidental markdown fences the AI might add despite instructions
   const cleaned = rawJson.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
 
   let data: SummaryData;
   try {
     data = JSON.parse(cleaned);
   } catch {
-    // Include the first 200 chars of the raw response so the error log is actionable
     throw new Error(`AI returned non-JSON for summary pack: ${cleaned.slice(0, 200)}`);
   }
 
-  // Guard: AI may return valid JSON with missing or null array fields
   if (!Array.isArray(data.phases) || !Array.isArray(data.assumptions) ||
       !Array.isArray(data.risks) || !Array.isArray(data.governance_cadence)) {
     throw new Error("AI summary pack response is missing required array fields (phases/assumptions/risks/governance_cadence)");
   }
 
-  const buffer = await buildSummaryPackDocx(data, projectData);
+  const docxBuffer = await buildSummaryPackDocx(data, projectData);
+  const buffer     = await convertToPdf(docxBuffer);
 
   const clientSlug = projectData.client.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 20);
-  const filename = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.docx`;
-  const preview  = `${data.phases.length} phases · ${data.assumptions.length} assumptions · ${data.risks.length} risks`;
+  const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.pdf`;
+  const preview    = `${data.phases.length} phases · ${data.assumptions.length} assumptions · ${data.risks.length} risks`;
 
   return { buffer, filename, preview };
 }
