@@ -128,6 +128,7 @@ export default function GovernanceStarterPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const generationStartRef = useRef<number | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [generatingStage, setGeneratingStage] = useState("");
   const [generatingStart, setGeneratingStart] = useState(0);
@@ -272,6 +273,33 @@ export default function GovernanceStarterPage() {
     const id = setTimeout(() => setGeneratingStage("AI is generating your documents…"), 2000);
     return () => clearTimeout(id);
   }, [isGenerating]);
+
+  // Polling fallback: if the stream fails to deliver the `done` event (e.g. NGINX
+  // buffering, network blip, or a bug in the server-side event ordering), this
+  // catches documents that landed in the DB and clears the spinner regardless.
+  // Runs every 10 s while generating, stops as soon as it detects new docs.
+  useEffect(() => {
+    if (!isGenerating || !selectedProjectId) return;
+    const startTime = generationStartRef.current;
+    if (!startTime) return;
+    const id = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/projects/${selectedProjectId}/documents`);
+        if (!r.ok) return;
+        const docs = await r.json() as Array<{ generatedAt?: string }>;
+        const hasNew = docs.some(d => d.generatedAt && new Date(d.generatedAt).getTime() > startTime);
+        if (hasNew) {
+          console.log("[generate] polling fallback detected new docs — clearing spinner");
+          setIsGenerating(false);
+          setGeneratingStage("");
+          queryClient.invalidateQueries({ queryKey: ["/api/projects", selectedProjectId, "documents"] });
+          toast.success("Documents generated — loading…");
+          clearInterval(id);
+        }
+      } catch {}
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [isGenerating, selectedProjectId, queryClient]);
 
   const ACCEPTED_TYPES = ".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv,.txt,.md";
   const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per file
@@ -463,6 +491,7 @@ export default function GovernanceStarterPage() {
     setGenerateError(null);
     setGeneratingStage("Preparing your request…");
     setGeneratingStart(Date.now());
+    generationStartRef.current = Date.now();
 
     // Soft warning at 7 min: generation is slow but still running — keep spinner up.
     // Hard cutoff at 15 min: assume the connection is dead and force the UI clear.
