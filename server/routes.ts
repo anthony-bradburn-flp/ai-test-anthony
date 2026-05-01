@@ -848,6 +848,7 @@ export async function registerRoutes(
   }, async (req, res) => {
     const parsed = generateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
+      console.error("[generate] schema validation failed:", JSON.stringify(parsed.error.flatten().fieldErrors));
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });
       return;
     }
@@ -1379,6 +1380,8 @@ export async function registerRoutes(
     } catch (err: unknown) {
       stopHeartbeat();
       const message = err instanceof Error ? err.message : "AI generation failed";
+      // Log full stack so pm2 logs show exactly where the throw originated
+      console.error("[generate] caught error:", err instanceof Error ? err.stack : String(err));
       audit("GENERATE_FAILED", req, { error: message });
       send({ type: "error", error: message });
       res.end();
