@@ -17,6 +17,7 @@ import Docxtemplater from "docxtemplater";
 import { storage, verifyPassword, hashPassword, DOCUMENTS_DIR, SUPPORTING_DOCS_DIR, DATA_DIR } from "./storage";
 import { hasOpenAIKey, hasAnthropicKey, getOpenAIKey, getAnthropicKey, hasSmartsheetKey } from "./secrets";
 import { verifySmartsheetConnection, generateTimelineTasks, createTimelineSheet, upsertTimeline } from "./smartsheet";
+import { generateSummaryPack } from "./summary-pack";
 import { generateRequestSchema, insertUserSchema, type GenerateRequest } from "@shared/schema";
 
 const TEMPLATES_DIR = join(process.cwd(), "data", "templates");
@@ -847,6 +848,7 @@ export async function registerRoutes(
   }, async (req, res) => {
     const parsed = generateRequestSchema.safeParse(req.body);
     if (!parsed.success) {
+      console.error("[generate] schema validation failed:", JSON.stringify(parsed.error.flatten().fieldErrors));
       res.status(400).json({ error: "Invalid request", details: parsed.error.flatten().fieldErrors });
       return;
     }
@@ -895,6 +897,58 @@ export async function registerRoutes(
     };
 
     try {
+      // ── Simplified mode: generate only the 2-3 page summary pack ────────────
+      // Bypasses the full template pipeline; uses a dedicated AI prompt and DOCX
+      // builder that produces a client-facing summary rather than governance docs.
+      if (projectData.simplifiedMode) {
+        const rawDocs = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
+          .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
+        const { buffer, filename, preview } = await generateSummaryPack(projectData, settings, rawDocs, activeKey!);
+        send({ type: "start", count: 1, truncatedDocs: [], missingTemplates: [] });
+        sendDoc({ type: "document", document: { name: "Project Summary Pack", filename, format: "docx", content: buffer.toString("base64"), preview } });
+        audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: 1, provider: settings.provider, supportingDocsCount: rawDocs.length, passthroughCount: 0, placeholderCount: 0 });
+
+        if (projectId) {
+          try {
+            if (generatedDocBuffers.length > 0) {
+              const projectDir = join(DOCUMENTS_DIR, projectId);
+              if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+              const existingDocs = await storage.listDocuments(projectId);
+              const runId = randomBytes(8).toString("hex");
+              let nextVersion = 1;
+              if (existingDocs.length > 0) {
+                if (versionMode === "replace") {
+                  await storage.deleteDocumentsByProject(projectId);
+                } else {
+                  nextVersion = Math.max(...existingDocs.map((d) => d.version)) + 1;
+                  await storage.markDocumentsNotLatest(projectId);
+                }
+              }
+              for (const { name, filename: fn, format, buffer: buf } of generatedDocBuffers) {
+                const docId = randomBytes(8).toString("hex");
+                const storagePath = `documents/${projectId}/${docId}_${fn}`;
+                await writeFile(join(DATA_DIR, storagePath), buf);
+                await storage.createDocument({
+                  projectId, name, filename: fn, format, storagePath,
+                  fileSize: buf.length, generatedAt: new Date().toISOString(),
+                  generatedBy: req.session.userId!, runId,
+                  version: nextVersion, versionLabel: `v${nextVersion}`, isLatest: true,
+                });
+              }
+              await storage.updateProject(projectId, { lastGeneratedAt: new Date().toISOString() });
+              console.log(`[generate] persisted summary pack at ${new Date().toISOString()}`);
+            }
+          } catch (saveErr) {
+            console.error("[generate] Failed to persist summary pack:", saveErr);
+          }
+        }
+
+        stopHeartbeat();
+        send({ type: "done", provider: settings.provider });
+        res.end();
+        return;
+      }
+
       // Load templates, packages, and extract supporting docs all in parallel
       const [allTemplates, allPackages, { supportingDocs, truncatedDocs }] = await Promise.all([
         storage.listTemplates(),
@@ -1326,6 +1380,8 @@ export async function registerRoutes(
     } catch (err: unknown) {
       stopHeartbeat();
       const message = err instanceof Error ? err.message : "AI generation failed";
+      // Log full stack so pm2 logs show exactly where the throw originated
+      console.error("[generate] caught error:", err instanceof Error ? err.stack : String(err));
       audit("GENERATE_FAILED", req, { error: message });
       send({ type: "error", error: message });
       res.end();
