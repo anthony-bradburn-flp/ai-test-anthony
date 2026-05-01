@@ -832,16 +832,17 @@ export async function registerRoutes(
       if (err.code !== "ERR_STREAM_WRITE_AFTER_END") console.error("[generate] response stream error:", err);
     });
     res.setTimeout(480_000, () => {
-      console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — writableEnded: ${res.writableEnded}`);
-      if (!res.writableEnded) {
-        // Headers not yet sent: safe to send an HTTP status code.
-        // Headers already sent: we're mid-stream and must write an error event to the body instead.
-        if (!res.headersSent) {
-          res.status(504).json({ error: "Generation timed out after 8 minutes. Please try again." });
-        } else {
-          try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 8 minutes." }) + "\n"); } catch { /* ignore */ }
-          res.end();
-        }
+      // writableEnded: true means res.end() was already called (generation completed).
+      // This is a ghost timer from a keep-alive socket — log nothing, do nothing.
+      if (res.writableEnded) return;
+      console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — generation still in progress`);
+      // Headers not yet sent: safe to send an HTTP status code.
+      // Headers already sent: we're mid-stream and must write an error event to the body instead.
+      if (!res.headersSent) {
+        res.status(504).json({ error: "Generation timed out after 8 minutes. Please try again." });
+      } else {
+        try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 8 minutes." }) + "\n"); } catch { /* ignore */ }
+        res.end();
       }
     });
     next();
@@ -888,7 +889,9 @@ export async function registerRoutes(
         res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
       }
     }, 20_000);
-    const stopHeartbeat = () => clearInterval(heartbeatInterval);
+    // Disabling the socket timer (setTimeout 0) prevents it firing as a ghost
+    // after res.end() on a keep-alive connection — which would log a spurious warning.
+    const stopHeartbeat = () => { clearInterval(heartbeatInterval); res.socket?.setTimeout(0); };
     const generatedDocBuffers: Array<{ name: string; filename: string; format: string; buffer: Buffer }> = [];
     const sendDoc = (event: Record<string, unknown>) => {
       const doc = event.document as { name: string; filename: string; format: string; content: string } | undefined;
