@@ -506,7 +506,7 @@ export async function generateSummaryPack(
     const client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 1 });
     const response = await client.chat.completions.create({
       model: "gpt-5.2",
-      max_tokens: 4096,
+      max_completion_tokens: 4096,
       messages: [{ role: "user", content: prompt }],
     });
     rawJson = response.choices[0]?.message?.content ?? "";
