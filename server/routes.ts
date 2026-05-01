@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs";
@@ -74,6 +74,10 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   // prefix all routes with /api
+
+  // Middleware applied only to routes that receive base64-encoded file content.
+  // Kept off the global stack so ordinary JSON routes stay limited to 1 MB.
+  const largeBody = express.json({ limit: "50mb" });
 
   // --- Auth ---
 
@@ -169,7 +173,7 @@ export async function registerRoutes(
 
   // --- Training Document ---
 
-  app.post("/api/admin/ai-settings/training-doc", requireSuperAdmin, async (req, res) => {
+  app.post("/api/admin/ai-settings/training-doc", requireSuperAdmin, largeBody, async (req, res) => {
     const { content, filename, size } = req.body;
 
     if (!content || typeof content !== "string") {
@@ -439,7 +443,7 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  app.post("/api/admin/templates/:id/file", requireAdmin, async (req, res) => {
+  app.post("/api/admin/templates/:id/file", requireAdmin, largeBody, async (req, res) => {
     const { fileData, originalFilename, fileSize } = req.body;
     if (!fileData || !originalFilename) {
       res.status(400).json({ error: "fileData and originalFilename are required" });
@@ -826,7 +830,7 @@ export async function registerRoutes(
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
 
-  app.post("/api/generate", requireAuth, generateRateLimit, (req, res, next) => {
+  app.post("/api/generate", requireAuth, generateRateLimit, largeBody, (req, res, next) => {
     // Absorb write-after-end errors so a timed-out socket doesn't crash the process
     res.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code !== "ERR_STREAM_WRITE_AFTER_END") console.error("[generate] response stream error:", err);
@@ -854,7 +858,15 @@ export async function registerRoutes(
       return;
     }
 
-    const settings = await storage.getAiSettings();
+    let settings;
+    try {
+      settings = await storage.getAiSettings();
+    } catch (settingsErr) {
+      console.error("[generate] Failed to load AI settings:", settingsErr);
+      res.status(500).json({ error: "Server configuration error. Please try again." });
+      return;
+    }
+
     const projectData = parsed.data;
     const projectId = typeof req.body.projectId === "string" ? req.body.projectId : undefined;
     const versionMode: "replace" | "new" = req.body.versionMode === "new" ? "new" : "replace";
@@ -880,7 +892,10 @@ export async function registerRoutes(
     // Disable Nagle's algorithm so each res.write() is sent to the client immediately
     if (res.socket) res.socket.setNoDelay(true);
 
-    const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
+    const send = (event: Record<string, unknown>) => {
+      // Guard: the socket timer and the catch block can race — skip writes to a closed stream.
+      if (!res.writableEnded) res.write(JSON.stringify(event) + "\n");
+    };
 
     // Heartbeat: sends a ping every 20 s to keep the socket alive and prevent
     // the idle timeout from firing between slow AI calls (e.g. large summaries).
@@ -1391,7 +1406,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/generate/download", requireAuth, async (req, res) => {
+  app.post("/api/generate/download", requireAuth, largeBody, async (req, res) => {
     const { documents } = req.body as { documents: Array<{ name: string; filename: string; format: string; content: string }> };
     if (!Array.isArray(documents) || documents.length === 0) {
       res.status(400).json({ error: "No documents provided" });
