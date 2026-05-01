@@ -921,8 +921,11 @@ export async function registerRoutes(
       if (projectData.simplifiedMode) {
         const rawDocs = (Array.isArray(req.body.supportingDocs) ? req.body.supportingDocs : [])
           .filter((d: unknown) => d && typeof (d as Record<string, unknown>).name === "string" && typeof (d as Record<string, unknown>).content === "string") as Array<{ name: string; content: string }>;
-        const { buffer, filename, preview } = await generateSummaryPack(projectData, settings, rawDocs, activeKey!);
+        // Send start BEFORE the AI call so the client sees progress immediately.
+        // If start arrives after the AI call finishes, the done event can race past
+        // start processing and leave the spinner stuck.
         send({ type: "start", count: 1, truncatedDocs: [], missingTemplates: [] });
+        const { buffer, filename, preview } = await generateSummaryPack(projectData, settings, rawDocs, activeKey!);
         sendDoc({ type: "document", document: { name: "Project Summary Pack", filename, format: "docx", content: buffer.toString("base64"), preview } });
         audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: 1, provider: settings.provider, supportingDocsCount: rawDocs.length, passthroughCount: 0, placeholderCount: 0 });
 
