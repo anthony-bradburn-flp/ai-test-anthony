@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "fs";
@@ -74,6 +74,10 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   // prefix all routes with /api
+
+  // Middleware applied only to routes that receive base64-encoded file content.
+  // Kept off the global stack so ordinary JSON routes stay limited to 1 MB.
+  const largeBody = express.json({ limit: "50mb" });
 
   // --- Auth ---
 
@@ -169,7 +173,7 @@ export async function registerRoutes(
 
   // --- Training Document ---
 
-  app.post("/api/admin/ai-settings/training-doc", requireSuperAdmin, async (req, res) => {
+  app.post("/api/admin/ai-settings/training-doc", requireSuperAdmin, largeBody, async (req, res) => {
     const { content, filename, size } = req.body;
 
     if (!content || typeof content !== "string") {
@@ -439,7 +443,7 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  app.post("/api/admin/templates/:id/file", requireAdmin, async (req, res) => {
+  app.post("/api/admin/templates/:id/file", requireAdmin, largeBody, async (req, res) => {
     const { fileData, originalFilename, fileSize } = req.body;
     if (!fileData || !originalFilename) {
       res.status(400).json({ error: "fileData and originalFilename are required" });
@@ -826,22 +830,23 @@ export async function registerRoutes(
   // Builds and returns the prompt context that would be sent to the AI provider.
   // Actual AI API calls are wired up once API keys are configured.
 
-  app.post("/api/generate", requireAuth, generateRateLimit, (req, res, next) => {
+  app.post("/api/generate", requireAuth, generateRateLimit, largeBody, (req, res, next) => {
     // Absorb write-after-end errors so a timed-out socket doesn't crash the process
     res.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code !== "ERR_STREAM_WRITE_AFTER_END") console.error("[generate] response stream error:", err);
     });
     res.setTimeout(480_000, () => {
-      console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — writableEnded: ${res.writableEnded}`);
-      if (!res.writableEnded) {
-        // Headers not yet sent: safe to send an HTTP status code.
-        // Headers already sent: we're mid-stream and must write an error event to the body instead.
-        if (!res.headersSent) {
-          res.status(504).json({ error: "Generation timed out after 8 minutes. Please try again." });
-        } else {
-          try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 8 minutes." }) + "\n"); } catch { /* ignore */ }
-          res.end();
-        }
+      // writableEnded: true means res.end() was already called (generation completed).
+      // This is a ghost timer from a keep-alive socket — log nothing, do nothing.
+      if (res.writableEnded) return;
+      console.warn(`[generate] socket idle timeout fired at ${new Date().toISOString()} — generation still in progress`);
+      // Headers not yet sent: safe to send an HTTP status code.
+      // Headers already sent: we're mid-stream and must write an error event to the body instead.
+      if (!res.headersSent) {
+        res.status(504).json({ error: "Generation timed out after 8 minutes. Please try again." });
+      } else {
+        try { res.write(JSON.stringify({ type: "error", error: "Generation timed out after 8 minutes." }) + "\n"); } catch { /* ignore */ }
+        res.end();
       }
     });
     next();
@@ -853,7 +858,15 @@ export async function registerRoutes(
       return;
     }
 
-    const settings = await storage.getAiSettings();
+    let settings;
+    try {
+      settings = await storage.getAiSettings();
+    } catch (settingsErr) {
+      console.error("[generate] Failed to load AI settings:", settingsErr);
+      res.status(500).json({ error: "Server configuration error. Please try again." });
+      return;
+    }
+
     const projectData = parsed.data;
     const projectId = typeof req.body.projectId === "string" ? req.body.projectId : undefined;
     const versionMode: "replace" | "new" = req.body.versionMode === "new" ? "new" : "replace";
@@ -879,7 +892,10 @@ export async function registerRoutes(
     // Disable Nagle's algorithm so each res.write() is sent to the client immediately
     if (res.socket) res.socket.setNoDelay(true);
 
-    const send = (event: Record<string, unknown>) => res.write(JSON.stringify(event) + "\n");
+    const send = (event: Record<string, unknown>) => {
+      // Guard: the socket timer and the catch block can race — skip writes to a closed stream.
+      if (!res.writableEnded) res.write(JSON.stringify(event) + "\n");
+    };
 
     // Heartbeat: sends a ping every 20 s to keep the socket alive and prevent
     // the idle timeout from firing between slow AI calls (e.g. large summaries).
@@ -888,7 +904,9 @@ export async function registerRoutes(
         res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
       }
     }, 20_000);
-    const stopHeartbeat = () => clearInterval(heartbeatInterval);
+    // Disabling the socket timer (setTimeout 0) prevents it firing as a ghost
+    // after res.end() on a keep-alive connection — which would log a spurious warning.
+    const stopHeartbeat = () => { clearInterval(heartbeatInterval); res.socket?.setTimeout(0); };
     const generatedDocBuffers: Array<{ name: string; filename: string; format: string; buffer: Buffer }> = [];
     const sendDoc = (event: Record<string, unknown>) => {
       const doc = event.document as { name: string; filename: string; format: string; content: string } | undefined;
@@ -1073,11 +1091,12 @@ export async function registerRoutes(
         ? (async () => {
             const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], raci: [], exec_summary: [] };
         try {
+          const t0 = Date.now();
           console.log("[generate] calling AI for placeholder array data…");
           const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
           let arrayJson = "";
           if (settings.provider === "anthropic") {
-            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
+            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000, maxRetries: 1 });
             const msg = await ac.messages.create({
               model: "claude-sonnet-4-6",
               max_tokens: 4096,
@@ -1086,7 +1105,7 @@ export async function registerRoutes(
             });
             arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
           } else {
-            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, maxRetries: 1, ...(settings.orgId ? { organization: settings.orgId } : {}) });
             const comp = await oc.chat.completions.create({
               model: "gpt-5.2",
               max_completion_tokens: 4096,
@@ -1097,6 +1116,7 @@ export async function registerRoutes(
             });
             arrayJson = comp.choices[0]?.message?.content ?? "{}";
           }
+          console.log(`[generate] placeholder AI responded in ${Date.now() - t0}ms`);
           const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
           const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
           if (j0 >= 0 && j1 > j0) {
@@ -1119,19 +1139,21 @@ export async function registerRoutes(
 
       const mainAiPromise: Promise<string> = aiDocNames.length > 0
         ? (async () => {
+            const t0main = Date.now();
             console.log(`[generate] calling ${settings.provider} API…`);
             try {
               if (settings.provider === "anthropic") {
-                const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000 });
+                const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000, maxRetries: 1 });
                 const message = await client.messages.create({
                   model: "claude-sonnet-4-6",
                   max_tokens: 8192,
                   system: systemPrompt,
                   messages: [{ role: "user", content: userPrompt }],
                 });
+                console.log(`[generate] ${settings.provider} responded in ${Date.now() - t0main}ms`);
                 return message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
               } else {
-                const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+                const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, maxRetries: 1, ...(settings.orgId ? { organization: settings.orgId } : {}) });
                 const completion = await client.chat.completions.create({
                   model: "gpt-5.2",
                   max_completion_tokens: 16384,
@@ -1140,10 +1162,11 @@ export async function registerRoutes(
                     { role: "user", content: userPrompt },
                   ],
                 });
+                console.log(`[generate] ${settings.provider} responded in ${Date.now() - t0main}ms`);
                 return completion.choices[0]?.message?.content ?? "";
               }
             } catch (err) {
-              console.error("[generate] main AI call failed:", err);
+              console.error("[generate] main AI call failed after %dms:", Date.now() - t0main, err);
               return "";
             }
           })()
@@ -1388,7 +1411,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/generate/download", requireAuth, async (req, res) => {
+  app.post("/api/generate/download", requireAuth, largeBody, async (req, res) => {
     const { documents } = req.body as { documents: Array<{ name: string; filename: string; format: string; content: string }> };
     if (!Array.isArray(documents) || documents.length === 0) {
       res.status(400).json({ error: "No documents provided" });
