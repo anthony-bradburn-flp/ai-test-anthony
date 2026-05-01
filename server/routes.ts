@@ -1091,11 +1091,12 @@ export async function registerRoutes(
         ? (async () => {
             const empty: PlaceholderArrays = { actions: [], risks: [], assumptions: [], decisions: [], comms: [], raci: [], exec_summary: [] };
         try {
+          const t0 = Date.now();
           console.log("[generate] calling AI for placeholder array data…");
           const arrayPrompt = buildPlaceholderArrayPrompt(projectData, supportingDocs);
           let arrayJson = "";
           if (settings.provider === "anthropic") {
-            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000 });
+            const ac = new Anthropic({ apiKey: getAnthropicKey(), timeout: 90_000, maxRetries: 1 });
             const msg = await ac.messages.create({
               model: "claude-sonnet-4-6",
               max_tokens: 4096,
@@ -1104,7 +1105,7 @@ export async function registerRoutes(
             });
             arrayJson = msg.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
           } else {
-            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+            const oc = new OpenAI({ apiKey: getOpenAIKey(), timeout: 90_000, maxRetries: 1, ...(settings.orgId ? { organization: settings.orgId } : {}) });
             const comp = await oc.chat.completions.create({
               model: "gpt-5.2",
               max_completion_tokens: 4096,
@@ -1115,6 +1116,7 @@ export async function registerRoutes(
             });
             arrayJson = comp.choices[0]?.message?.content ?? "{}";
           }
+          console.log(`[generate] placeholder AI responded in ${Date.now() - t0}ms`);
           const stripped = arrayJson.replace(/```json?\s*/gi, "").replace(/```/g, "").trim();
           const j0 = stripped.indexOf("{"), j1 = stripped.lastIndexOf("}");
           if (j0 >= 0 && j1 > j0) {
@@ -1137,19 +1139,21 @@ export async function registerRoutes(
 
       const mainAiPromise: Promise<string> = aiDocNames.length > 0
         ? (async () => {
+            const t0main = Date.now();
             console.log(`[generate] calling ${settings.provider} API…`);
             try {
               if (settings.provider === "anthropic") {
-                const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000 });
+                const client = new Anthropic({ apiKey: getAnthropicKey(), timeout: 120_000, maxRetries: 1 });
                 const message = await client.messages.create({
                   model: "claude-sonnet-4-6",
                   max_tokens: 8192,
                   system: systemPrompt,
                   messages: [{ role: "user", content: userPrompt }],
                 });
+                console.log(`[generate] ${settings.provider} responded in ${Date.now() - t0main}ms`);
                 return message.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("");
               } else {
-                const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, ...(settings.orgId ? { organization: settings.orgId } : {}) });
+                const client = new OpenAI({ apiKey: getOpenAIKey(), timeout: 120_000, maxRetries: 1, ...(settings.orgId ? { organization: settings.orgId } : {}) });
                 const completion = await client.chat.completions.create({
                   model: "gpt-5.2",
                   max_completion_tokens: 16384,
@@ -1158,10 +1162,11 @@ export async function registerRoutes(
                     { role: "user", content: userPrompt },
                   ],
                 });
+                console.log(`[generate] ${settings.provider} responded in ${Date.now() - t0main}ms`);
                 return completion.choices[0]?.message?.content ?? "";
               }
             } catch (err) {
-              console.error("[generate] main AI call failed:", err);
+              console.error("[generate] main AI call failed after %dms:", Date.now() - t0main, err);
               return "";
             }
           })()
