@@ -492,7 +492,7 @@ export async function generateSummaryPack(
   let rawJson: string;
 
   if (settings.provider === "anthropic") {
-    const client = new Anthropic({ apiKey, timeout: 120_000 });
+    const client = new Anthropic({ apiKey, timeout: 120_000, maxRetries: 1 });
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 4096,
@@ -503,9 +503,9 @@ export async function generateSummaryPack(
       .map((b) => b.text)
       .join("");
   } else {
-    const client = new OpenAI({ apiKey, timeout: 120_000 });
+    const client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 1 });
     const response = await client.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-5.2",
       max_tokens: 4096,
       messages: [{ role: "user", content: prompt }],
     });
