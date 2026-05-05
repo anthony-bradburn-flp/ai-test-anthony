@@ -425,7 +425,10 @@ function buildRisksTable(risks: Risk[]): Table {
 
 // ─── LibreOffice PDF conversion ───────────────────────────────────────────────
 
-async function convertToPdf(docxBuf: Buffer): Promise<Buffer> {
+/** Try to convert DOCX → PDF via LibreOffice headless.
+ *  Returns { buffer, ext } — ext is "pdf" on success, "docx" if LibreOffice
+ *  is not installed on this server (ENOENT) so the caller can adjust the filename. */
+async function tryConvertToPdf(docxBuf: Buffer): Promise<{ buffer: Buffer; ext: "pdf" | "docx" }> {
   const id = randomBytes(8).toString("hex");
   const tmpDocx = join(tmpdir(), `spack_${id}.docx`);
   const tmpPdf  = join(tmpdir(), `spack_${id}.pdf`);
@@ -439,7 +442,16 @@ async function convertToPdf(docxBuf: Buffer): Promise<Buffer> {
         (err) => (err ? reject(err) : resolve()),
       ),
     );
-    return await fsp.readFile(tmpPdf);
+    const pdf = await fsp.readFile(tmpPdf);
+    return { buffer: pdf, ext: "pdf" };
+  } catch (err: any) {
+    if (err?.code === "ENOENT") {
+      // LibreOffice is not installed on this server — return the DOCX buffer.
+      // Install with: sudo apt-get install -y libreoffice
+      console.warn("[summary-pack] LibreOffice not found — serving DOCX instead of PDF. Install libreoffice to enable PDF output.");
+      return { buffer: docxBuf, ext: "docx" };
+    }
+    throw err;
   } finally {
     await Promise.allSettled([fsp.unlink(tmpDocx), fsp.unlink(tmpPdf)]);
   }
@@ -666,11 +678,11 @@ export async function generateSummaryPack(
     throw new Error("AI summary pack response is missing required array fields (phases/assumptions/risks/governance_cadence)");
   }
 
-  const docxBuffer = await buildSummaryPackDocx(data, projectData);
-  const buffer     = await convertToPdf(docxBuffer);
+  const docxBuffer     = await buildSummaryPackDocx(data, projectData);
+  const { buffer, ext } = await tryConvertToPdf(docxBuffer);
 
   const clientSlug = projectData.client.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 20);
-  const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.pdf`;
+  const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.${ext}`;
   const preview    = `${data.phases.length} phases · ${data.assumptions.length} assumptions · ${data.risks.length} risks`;
 
   return { buffer, filename, preview };
