@@ -41,6 +41,20 @@ function buildColMap(columns: any[]): Record<string, number> {
   return map;
 }
 
+/**
+ * Extract the array of created rows from an addRows SDK response.
+ * The Smartsheet JS SDK can return either:
+ *   { result: [...rows], message: "SUCCESS", ... }  — standard wrapped form
+ *   [...rows]                                        — some SDK versions return the array directly
+ */
+function extractRowsFromAddResult(res: any): any[] {
+  if (Array.isArray(res?.result)) return res.result;
+  if (Array.isArray(res)) return res;
+  // Single-object result (shouldn't happen for addRows but guard anyway)
+  if (res?.result && typeof res.result === "object") return [res.result];
+  return [];
+}
+
 export interface TimelineTask {
   taskName: string;
   phase: string;
@@ -243,9 +257,22 @@ export async function createTimelineSheet(
   const numericSheetId: number = Number(createdSheet.id);
   const sheetId: string = String(numericSheetId);
 
-  // Use columns from the create response — avoids an immediate GET that can
-  // return 404 due to Smartsheet's brief post-creation propagation delay.
-  const colMap = buildColMap(createdSheet.columns ?? []);
+  if (!numericSheetId || isNaN(numericSheetId)) {
+    console.error("[timeline] createSheet response missing ID:", JSON.stringify(sheet).slice(0, 500));
+    throw new Error("Smartsheet returned no sheet ID after creation");
+  }
+
+  // Prefer columns from the create response (avoids a second round-trip).
+  // If the create response omits columns, fetch the sheet — Smartsheet may need
+  // a brief moment to populate the column list on newly created sheets.
+  let rawColumns: any[] = createdSheet.columns ?? [];
+  if (rawColumns.length === 0) {
+    console.warn("[timeline] Create response had no columns — fetching sheet to get column IDs");
+    const fetched = await client.sheets.getSheet({ sheetId: numericSheetId });
+    rawColumns = (fetched.result ?? fetched).columns ?? [];
+  }
+  const colMap = buildColMap(rawColumns);
+  console.log(`[timeline] colMap keys: ${Object.keys(colMap).join(", ")}`);
 
   // Write task rows grouped by phase with hierarchy
   await writeTaskRowsWithHierarchy(client, numericSheetId, colMap, tasks);
@@ -341,6 +368,10 @@ async function writeTaskRowsWithHierarchy(
   const cStatus = colMap["Status"];
   const cNotes  = colMap["Notes"];
 
+  // Build a cell only when the column exists in this sheet
+  const cell = (colId: number | undefined, value: string) =>
+    colId != null ? { columnId: colId, value } : null;
+
   // Group tasks by phase, preserving order
   const phases: string[] = [];
   const tasksByPhase = new Map<string, TimelineTask[]>();
@@ -364,38 +395,58 @@ async function writeTaskRowsWithHierarchy(
       body: [{
         toBottom: true,
         bold: true,
-        cells: [{ columnId: cTask, value: phase }],
+        cells: cTask != null ? [{ columnId: cTask, value: phase }] : [],
       }],
     });
-    const headerRow = (headerResult.result ?? headerResult)[0];
-    const headerRowId: number = headerRow.id;
 
-    // Add task rows as children of the phase header
+    // Robustly extract the created row ID — the SDK may return the rows wrapped
+    // in a `.result` array OR as a bare array depending on the SDK version.
+    const headerRows = extractRowsFromAddResult(headerResult);
+    const headerRow  = headerRows[0];
+    if (!headerRow?.id) {
+      console.error(
+        `[timeline] Could not extract header row ID for phase "${phase}". ` +
+        `addRows response: ${JSON.stringify(headerResult).slice(0, 400)}`
+      );
+      throw new Error(`Failed to get header row ID for phase "${phase}" — cannot build row hierarchy`);
+    }
+    const headerRowId: number = Number(headerRow.id);
+    console.log(`[timeline] Phase "${phase}": header row id=${headerRowId}`);
+
+    // Brief pause so Smartsheet can commit the parent row before we reference it
+    // via parentId. Without this, the child-row POST can arrive before the server
+    // has propagated the new row, causing an immediate 404 "Not Found" response.
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Add task rows as children of the phase header (batch up to 200 per request)
     const phaseTasks = tasksByPhase.get(phase)!;
     const taskBodies = phaseTasks.map((task) => ({
       parentId: headerRowId,
       toBottom: true,
       cells: [
-        cTask   && { columnId: cTask,   value: task.taskName },
-        cStart  && { columnId: cStart,  value: task.startDate },
-        cEnd    && { columnId: cEnd,    value: task.endDate },
-        cOwner  && { columnId: cOwner,  value: task.owner },
-        cStatus && { columnId: cStatus, value: task.status },
-        cNotes  && { columnId: cNotes,  value: task.notes },
-      ].filter(Boolean),
+        cell(cTask,   task.taskName),
+        cell(cStart,  task.startDate),
+        cell(cEnd,    task.endDate),
+        cell(cOwner,  task.owner),
+        cell(cStatus, task.status),
+        cell(cNotes,  task.notes),
+      ].filter((c): c is NonNullable<typeof c> => c !== null),
     }));
 
-    const taskResult = await client.sheets.addRows({ sheetId, body: taskBodies });
-    const addedTaskRows: any[] = taskResult.result ?? taskResult;
-    for (const row of addedTaskRows) {
-      taskIndex++;
-      taskRowInfo.set(taskIndex, { rowNumber: row.rowNumber, rowId: row.id });
+    for (let i = 0; i < taskBodies.length; i += 200) {
+      const taskResult = await client.sheets.addRows({ sheetId, body: taskBodies.slice(i, i + 200) });
+      const addedRows  = extractRowsFromAddResult(taskResult);
+      for (const row of addedRows) {
+        taskIndex++;
+        taskRowInfo.set(taskIndex, { rowNumber: row.rowNumber, rowId: row.id });
+      }
     }
   }
 
   // Pass 2: re-fetch sheet to get live column state (Smartsheet may have added/changed
   // system columns like Predecessor after row operations)
-  const freshSheet = await client.sheets.getSheet({ sheetId });
+  const freshSheetRaw = await client.sheets.getSheet({ sheetId });
+  const freshSheet = freshSheetRaw.result ?? freshSheetRaw;
   const freshColMap = buildColMap(freshSheet.columns ?? []);
   const cPred = freshColMap["Predecessor"];
 
