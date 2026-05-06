@@ -268,9 +268,9 @@ function buildGanttPdf(phases: Phase[], weeks: Date[], step: number, accentColor
     for (const ms of phase.milestones ?? []) {
       const mIdx = milestoneWeekIdx(ms.date, weeks);
       dataRows.push([
-        { text: `  ↳ ${ms.name}`, fontSize: 6.5, color: MID, fillColor: WHITE },
+        { text: `  > ${ms.name}`, fontSize: 6.5, color: MID, fillColor: WHITE },
         ...weeks.map((_, i) => ({
-          text: i === mIdx ? "◆" : "",
+          text: i === mIdx ? "*" : "",
           fontSize: 7,
           color: DARK,
           alignment: "center",
@@ -300,7 +300,7 @@ function buildPhaseDetailPdf(phases: Phase[], accentColor: string = ACCENT): any
   const dataRows = phases.map((phase, idx) => {
     const s = new Date(phase.start_date);
     const e = new Date(phase.end_date);
-    const dateStr = `${s.getDate()} ${MONTHS[s.getMonth()]} → ${e.getDate()} ${MONTHS[e.getMonth()]}`;
+    const dateStr = `${s.getDate()} ${MONTHS[s.getMonth()]} - ${e.getDate()} ${MONTHS[e.getMonth()]}`;
     const fill = idx % 2 === 0 ? WHITE : ALT;
 
     return [
@@ -308,7 +308,7 @@ function buildPhaseDetailPdf(phases: Phase[], accentColor: string = ACCENT): any
       { text: dateStr, fontSize: 7, color: MID, fillColor: fill },
       {
         stack: phase.key_activities.map((a) => ({
-          text: `• ${a}`,
+          text: `- ${a}`,
           fontSize: 7,
           color: DARK,
           margin: [0, 1, 0, 1],
@@ -318,7 +318,7 @@ function buildPhaseDetailPdf(phases: Phase[], accentColor: string = ACCENT): any
       {
         stack: [
           ...phase.deliverables.map((d) => ({
-            text: `• ${d}`,
+            text: `- ${d}`,
             fontSize: 7,
             color: DARK,
             margin: [0, 1, 0, 1],
@@ -410,10 +410,10 @@ function buildContactsTable(projectData: GenerateRequest, accentColor: string = 
     const isSponsor = cm != null && i === sponsorIdx;
 
     const fmText = fm
-      ? `${fm.name}  —  ${fm.role}${fm.allocation != null && fm.allocation < 100 ? ` (${fm.allocation}%)` : ""}`
+      ? `${fm.name}  -  ${fm.role}${fm.allocation != null && fm.allocation < 100 ? ` (${fm.allocation}%)` : ""}`
       : "";
     const cmText = cm
-      ? `${cm.name}  —  ${cm.role}${isSponsor ? "  ★ Sponsor" : ""}`
+      ? `${cm.name}  -  ${cm.role}${isSponsor ? " (Sponsor)" : ""}`
       : "";
 
     return [
@@ -448,8 +448,8 @@ async function buildSummaryPackPdf(
 
   const firstYear   = new Date(projectData.startDate).getFullYear();
   const lastYear    = new Date(projectData.endDate).getFullYear();
-  const yearSuffix  = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
-  const dateRange   = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
+  const yearSuffix  = firstYear === lastYear ? `${firstYear}` : `${firstYear}-${lastYear}`;
+  const dateRange   = `${fmtWeek(weeks[0])} - ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
   const accentColor = clientBranding?.colour ?? ACCENT;
   const logo        = clientBranding?.logoBase64;
 
@@ -510,12 +510,12 @@ async function buildSummaryPackPdf(
         color: DARK,
         margin: [0, 0, 0, 12],
       },
-      sectionHead(`Phase Overview  —  ${dateRange}`),
+      sectionHead(`Phase Overview  -  ${dateRange}`),
       buildGanttPdf(data.phases, weeks, step, accentColor),
       buildContactsTable(projectData, accentColor),
 
       // ── Page 2: Phase detail ────────────────────────────────────────────────
-      sectionHead("Phase detail  —  what each phase produces", true),
+      sectionHead("Phase detail  -  what each phase produces", true),
       buildPhaseDetailPdf(data.phases, accentColor),
 
       // ── Page 3: Assumptions + Governance + Risks ────────────────────────────
@@ -526,7 +526,7 @@ async function buildSummaryPackPdf(
           body: [
             [hCell("Key assumptions")],
             ...data.assumptions.map((a, idx) => [{
-              text: `• ${a}`,
+              text: `- ${a}`,
               fontSize: 7.5,
               color: DARK,
               fillColor: idx % 2 === 0 ? WHITE : ALT,
