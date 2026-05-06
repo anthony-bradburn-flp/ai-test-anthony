@@ -32,6 +32,11 @@ const WHITE  = "#FFFFFF";
 const PAGE_W = 770;
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
+interface Milestone {
+  name: string;
+  date: string; // YYYY-MM-DD
+}
+
 interface Phase {
   name:           string;
   start_date:     string;
@@ -40,6 +45,7 @@ interface Phase {
   key_activities: string[];
   deliverables:   string[];
   sign_off:       string | null;
+  milestones:     Milestone[];
 }
 
 interface CadenceRow {
@@ -121,7 +127,11 @@ Return exactly this JSON structure — all fields required:
       "workshop": "Workshop title/description or null if none",
       "key_activities": ["concise activity", "concise activity"],
       "deliverables": ["deliverable name", "deliverable name"],
-      "sign_off": "Sign-off description and date (e.g. 'Client approval w/c 18 May') or null"
+      "sign_off": "Sign-off description and date (e.g. 'Client approval w/c 18 May') or null",
+      "milestones": [
+        { "name": "Kick-off", "date": "YYYY-MM-DD" },
+        { "name": "Deliverable sign-off", "date": "YYYY-MM-DD" }
+      ]
     }
   ],
   "assumptions": ["assumption statement"],
@@ -148,7 +158,8 @@ RULES
 - Include 3–4 governance cadence rows (lightweight: weekly check-in, bi-weekly status, phase reviews, workshops).
 - Identify 3–4 key risks with concrete mitigations.
 - Dates must be valid YYYY-MM-DD within the project's date range.
-- Keep activities and deliverables short (5–8 words each).`;
+- Keep activities and deliverables short (5–8 words each).
+- Each phase must include 1–3 milestones. Milestone dates must fall within the phase's start_date–end_date. Milestones should represent key events: kick-off, workshop, review, sign-off, or major deliverable.`;
 
   return prompt;
 }
@@ -183,6 +194,17 @@ function phaseActive(phase: Phase, weekStart: Date, step: number): boolean {
   const we = new Date(weekStart);
   we.setDate(weekStart.getDate() + step * 7 - 1);
   return weekStart <= pe && we >= ps;
+}
+
+// Returns the index of the last week column whose start is on or before the milestone date.
+function milestoneWeekIdx(dateStr: string, weeks: Date[]): number {
+  const d = new Date(dateStr);
+  let idx = 0;
+  for (let i = 0; i < weeks.length; i++) {
+    if (weeks[i] <= d) idx = i;
+    else break;
+  }
+  return idx;
 }
 
 // ─── pdfmake helpers ──────────────────────────────────────────────────────────
@@ -228,15 +250,31 @@ function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
     ...weeks.map((w) => hCell(fmtWeek(w), { fontSize: 6, align: "center" })),
   ];
 
-  const dataRows = phases.map((phase, idx) => {
+  const dataRows: any[][] = [];
+  phases.forEach((phase, idx) => {
     const rowFill = idx % 2 === 0 ? WHITE : ALT;
-    return [
-      { text: phase.name, fontSize: 7, color: DARK, fillColor: rowFill },
+    // Phase bar row
+    dataRows.push([
+      { text: phase.name, fontSize: 7, bold: true, color: DARK, fillColor: rowFill },
       ...weeks.map((w) => ({
         text: " ",
         fillColor: phaseActive(phase, w, step) ? ACCENT : rowFill,
       })),
-    ];
+    ]);
+    // Milestone sub-rows
+    for (const ms of phase.milestones ?? []) {
+      const mIdx = milestoneWeekIdx(ms.date, weeks);
+      dataRows.push([
+        { text: `  ↳ ${ms.name}`, fontSize: 6.5, color: MID, fillColor: WHITE },
+        ...weeks.map((_, i) => ({
+          text: i === mIdx ? "◆" : "",
+          fontSize: 7,
+          color: DARK,
+          alignment: "center",
+          fillColor: WHITE,
+        })),
+      ]);
+    }
   });
 
   return {
@@ -356,6 +394,45 @@ function buildRisksPdf(risks: Risk[]): any {
   };
 }
 
+function buildContactsTable(projectData: GenerateRequest): any {
+  const flipTeam   = projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[];
+  const clientTeam = projectData.clientStakeholders   as { name: string; role: string }[];
+  const sponsorIdx = projectData.sponsorIndex;
+
+  const maxRows = Math.max(flipTeam.length, clientTeam.length);
+  const dataRows = Array.from({ length: maxRows }, (_, i) => {
+    const fill      = i % 2 === 0 ? WHITE : ALT;
+    const fm        = flipTeam[i];
+    const cm        = clientTeam[i];
+    const isSponsor = cm != null && i === sponsorIdx;
+
+    const fmText = fm
+      ? `${fm.name}  —  ${fm.role}${fm.allocation != null && fm.allocation < 100 ? ` (${fm.allocation}%)` : ""}`
+      : "";
+    const cmText = cm
+      ? `${cm.name}  —  ${cm.role}${isSponsor ? "  ★ Sponsor" : ""}`
+      : "";
+
+    return [
+      { text: fmText, fontSize: 7.5, color: DARK,                     fillColor: fill },
+      { text: cmText, fontSize: 7.5, color: isSponsor ? ACCENT : DARK, fillColor: fill },
+    ];
+  });
+
+  return {
+    table: {
+      widths: ["*", "*"],
+      headerRows: 1,
+      body: [
+        [hCell("Flipside Team"), hCell("Client Team")],
+        ...dataRows,
+      ],
+    },
+    layout: tblLayout,
+    margin: [0, 8, 0, 0],
+  };
+}
+
 // ─── PDF assembler ────────────────────────────────────────────────────────────
 
 async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
@@ -366,11 +443,6 @@ async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateReque
   const lastYear   = new Date(projectData.endDate).getFullYear();
   const yearSuffix = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
   const dateRange  = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
-
-  const sponsor  = projectData.clientStakeholders[projectData.sponsorIndex];
-  const flipTeam = (projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
-    .map((s) => `${s.name} (${s.role})`)
-    .join("  ·  ");
 
   const docDef: any = {
     pageSize: "A4",
@@ -433,32 +505,7 @@ async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateReque
       },
       sectionHead(`Phase Overview  —  ${dateRange}`),
       buildGanttPdf(data.phases, weeks, step),
-      {
-        text: "■  Active phase",
-        fontSize: 7,
-        color: ACCENT,
-        margin: [0, 2, 0, 10],
-      },
-      {
-        columns: [
-          {
-            width: "50%",
-            fontSize: 7.5,
-            text: [
-              { text: "Flipside team: ", bold: true },
-              { text: flipTeam, color: MID },
-            ],
-          },
-          ...(sponsor ? [{
-            width: "50%",
-            fontSize: 7.5,
-            text: [
-              { text: "Client sponsor: ", bold: true },
-              { text: `${sponsor.name} (${sponsor.role})`, color: MID },
-            ],
-          }] : []),
-        ],
-      },
+      buildContactsTable(projectData),
 
       // ── Page 2: Phase detail ────────────────────────────────────────────────
       sectionHead("Phase detail  —  what each phase produces", true),
