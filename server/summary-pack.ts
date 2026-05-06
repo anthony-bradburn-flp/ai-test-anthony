@@ -1,31 +1,41 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import {
-  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  WidthType, AlignmentType, BorderStyle, PageOrientation, ShadingType,
-  type IBorderOptions,
-} from "docx";
-import { execFile } from "child_process";
-import { promises as fsp } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { randomBytes } from "crypto";
 import type { AiSettings } from "./storage";
 import type { GenerateRequest } from "@shared/schema";
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const PdfPrinter: any = require("pdfmake/js/Printer.js").default;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { vfs: hlRawVfs, fonts: hlFonts } = require("pdfmake/build/standard-fonts/Helvetica.js") as {
+  vfs: Record<string, { data: string; encoding: string }>;
+  fonts: Record<string, { normal: string; bold: string; italics: string; bolditalics: string }>;
+};
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const hlVfs: any = require("pdfmake/js/virtual-fs.js").default;
+
+// Populate the VirtualFileSystem with Helvetica AFM metrics (idempotent — safe to call multiple times)
+for (const [name, content] of Object.entries(hlRawVfs)) {
+  if (!hlVfs.existsSync(name)) {
+    hlVfs.writeFileSync(name, Buffer.from(content.data, (content.encoding as BufferEncoding) || "utf8"));
+  }
+}
+
 // ─── Brand tokens ─────────────────────────────────────────────────────────────
-const ACCENT   = "C41E3A"; // Flipside red — active phase bars, sign-off text, accent rule
-const DARK     = "111827"; // Near-black — table headers
-const MID      = "6B7280"; // Secondary / muted text
-const RULE_COL = "E5E7EB"; // Thin cell border colour
-const ALT_ROW  = "F9FAFB"; // Alternating table row background
-const WHITE    = "FFFFFF";
+const ACCENT = "#C41E3A"; // Flipside red
+const DARK   = "#111827"; // Near-black — headers, primary text
+const MID    = "#6B7280"; // Secondary / muted text
+const RULE   = "#E5E7EB"; // Cell border colour
+const ALT    = "#F9FAFB"; // Alternating row background
+const WHITE  = "#FFFFFF";
+
+// A4 landscape content width: 841.89 − 36 − 36 ≈ 770 pt
+const PAGE_W = 770;
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface Phase {
   name:           string;
-  start_date:     string; // YYYY-MM-DD
-  end_date:       string; // YYYY-MM-DD
+  start_date:     string;
+  end_date:       string;
   workshop:       string | null;
   key_activities: string[];
   deliverables:   string[];
@@ -148,7 +158,6 @@ RULES
 function getWeekStarts(startDate: string, endDate: string): { weeks: Date[]; step: number } {
   const s = new Date(startDate);
   const e = new Date(endDate);
-  // Rewind to the Monday on or before start
   const dow = s.getDay();
   s.setDate(s.getDate() - (dow === 0 ? 6 : dow - 1));
 
@@ -158,7 +167,6 @@ function getWeekStarts(startDate: string, endDate: string): { weeks: Date[]; ste
     all.push(new Date(cur));
     cur.setDate(cur.getDate() + 7);
   }
-  // Cap at 16 display columns; widen step for long projects
   const step = all.length <= 16 ? 1 : all.length <= 32 ? 2 : 4;
   return { weeks: all.filter((_, i) => i % step === 0), step };
 }
@@ -177,289 +185,180 @@ function phaseActive(phase: Phase, weekStart: Date, step: number): boolean {
   return weekStart <= pe && we >= ps;
 }
 
-// ─── Border / shading helpers ─────────────────────────────────────────────────
+// ─── pdfmake helpers ──────────────────────────────────────────────────────────
 
-function thinBorder(): IBorderOptions {
-  return { style: BorderStyle.SINGLE, size: 1, color: RULE_COL };
+const tblLayout = {
+  hLineWidth: () => 0.5,
+  vLineWidth: () => 0.5,
+  hLineColor: () => RULE,
+  vLineColor: () => RULE,
+  paddingLeft:   () => 5,
+  paddingRight:  () => 5,
+  paddingTop:    () => 4,
+  paddingBottom: () => 4,
+};
+
+function hCell(text: string, opts: { fontSize?: number; align?: string } = {}): any {
+  return {
+    text,
+    bold: true,
+    color: WHITE,
+    fillColor: DARK,
+    fontSize: opts.fontSize ?? 8,
+    alignment: opts.align ?? "left",
+  };
 }
 
-function noBorder(): IBorderOptions {
-  return { style: BorderStyle.NONE, size: 0, color: WHITE };
-}
-
-function allBorders(fn: () => IBorderOptions): { top: IBorderOptions; bottom: IBorderOptions; left: IBorderOptions; right: IBorderOptions } {
-  const b = fn();
-  return { top: b, bottom: b, left: b, right: b };
-}
-
-// ShadingType.CLEAR is the correct OOXML value for "use fill as the background colour".
-// The legacy "solid" val fills with the foreground *color* attribute (defaults to black)
-// which is why tables previously appeared entirely black.
-function cellShading(fill: string) {
-  return { fill, type: ShadingType.CLEAR };
+function sectionHead(text: string, pageBreak = false): any {
+  return {
+    text,
+    bold: true,
+    fontSize: 11,
+    color: DARK,
+    margin: [0, pageBreak ? 2 : 14, 0, 6],
+    ...(pageBreak ? { pageBreak: "before" as const } : {}),
+  };
 }
 
 // ─── Table builders ───────────────────────────────────────────────────────────
 
-function buildGanttTable(phases: Phase[], weeks: Date[], step: number): Table {
-  const N = weeks.length;
-  // Phase name column 26%, week columns split remaining 74%
-  const weekPct = Math.max(1, Math.floor(74 / N));
-
-  const headerCells = [
-    new TableCell({
-      shading: cellShading(DARK),
-      borders: allBorders(thinBorder),
-      width: { size: 26, type: WidthType.PERCENTAGE },
-      children: [new Paragraph({
-        children: [new TextRun({ text: "Phase", bold: true, color: WHITE, size: 16 })],
-        spacing: { before: 40, after: 40 },
-      })],
-    }),
-    ...weeks.map((w) =>
-      new TableCell({
-        shading: cellShading(DARK),
-        borders: allBorders(thinBorder),
-        width: { size: weekPct, type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [new TextRun({ text: fmtWeek(w), bold: true, color: WHITE, size: 12 })],
-          spacing: { before: 40, after: 40 },
-        })],
-      })
-    ),
+function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
+  const headerRow = [
+    hCell("Phase"),
+    ...weeks.map((w) => hCell(fmtWeek(w), { fontSize: 6, align: "center" })),
   ];
 
-  const phaseRows = phases.map((phase) =>
-    new TableRow({
-      children: [
-        new TableCell({
-          shading: cellShading(ALT_ROW),
-          borders: allBorders(thinBorder),
-          width: { size: 26, type: WidthType.PERCENTAGE },
-          children: [new Paragraph({
-            children: [new TextRun({ text: phase.name, size: 16, color: DARK })],
-            spacing: { before: 60, after: 60 },
-          })],
-        }),
-        ...weeks.map((w) => {
-          const active = phaseActive(phase, w, step);
-          return new TableCell({
-            shading: cellShading(active ? ACCENT : WHITE),
-            borders: allBorders(thinBorder),
-            width: { size: weekPct, type: WidthType.PERCENTAGE },
-            children: [new Paragraph({ children: [], spacing: { before: 60, after: 60 } })],
-          });
-        }),
-      ],
-    })
-  );
-
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [new TableRow({ children: headerCells }), ...phaseRows],
+  const dataRows = phases.map((phase, idx) => {
+    const rowFill = idx % 2 === 0 ? WHITE : ALT;
+    return [
+      { text: phase.name, fontSize: 7, color: DARK, fillColor: rowFill },
+      ...weeks.map((w) => ({
+        text: " ",
+        fillColor: phaseActive(phase, w, step) ? ACCENT : rowFill,
+      })),
+    ];
   });
+
+  return {
+    table: {
+      widths: [200, ...weeks.map(() => "*")],
+      body: [headerRow, ...dataRows],
+    },
+    layout: tblLayout,
+    margin: [0, 0, 0, 6],
+  };
 }
 
-function buildPhaseDetailTable(phases: Phase[]): Table {
-  const COLS = [18, 14, 36, 32];
-  const HEADS = ["Phase", "Dates", "Key Activities", "Deliverables & Review"];
+function buildPhaseDetailPdf(phases: Phase[]): any {
+  // [18%, 14%, 36%, 32%] of 770pt
+  const WIDTHS = [139, 108, 277, 246];
+  const HEADS  = ["Phase", "Dates", "Key Activities", "Deliverables & Review"];
 
-  const headerRow = new TableRow({
-    children: HEADS.map((h, i) =>
-      new TableCell({
-        shading: cellShading(DARK),
-        borders: allBorders(thinBorder),
-        width: { size: COLS[i], type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          children: [new TextRun({ text: h, bold: true, color: WHITE, size: 16 })],
-          spacing: { before: 60, after: 60 },
-        })],
-      })
-    ),
-  });
+  const headerRow = HEADS.map((h) => hCell(h));
 
   const dataRows = phases.map((phase, idx) => {
     const s = new Date(phase.start_date);
     const e = new Date(phase.end_date);
-    const dateStr = `w/c ${s.getDate()} ${MONTHS[s.getMonth()]} → w/c ${e.getDate()} ${MONTHS[e.getMonth()]}`;
-    const fill = idx % 2 === 0 ? WHITE : ALT_ROW;
+    const dateStr = `${s.getDate()} ${MONTHS[s.getMonth()]} → ${e.getDate()} ${MONTHS[e.getMonth()]}`;
+    const fill = idx % 2 === 0 ? WHITE : ALT;
 
-    const activityParagraphs = phase.key_activities.map((a) =>
-      new Paragraph({ children: [new TextRun({ text: `• ${a}`, size: 16, color: DARK })], spacing: { after: 40 } })
-    );
-
-    const deliverableParagraphs = [
-      ...phase.deliverables.map((d) =>
-        new Paragraph({ children: [new TextRun({ text: `• ${d}`, size: 16, color: DARK })], spacing: { after: 40 } })
-      ),
-      ...(phase.sign_off ? [new Paragraph({
-        children: [new TextRun({ text: `Sign-off: ${phase.sign_off}`, bold: true, color: ACCENT, size: 16 })],
-        spacing: { before: 60 },
-      })] : []),
+    return [
+      { text: phase.name, bold: true, fontSize: 7.5, color: DARK, fillColor: fill },
+      { text: dateStr, fontSize: 7, color: MID, fillColor: fill },
+      {
+        stack: phase.key_activities.map((a) => ({
+          text: `• ${a}`,
+          fontSize: 7,
+          color: DARK,
+          margin: [0, 1, 0, 1],
+        })),
+        fillColor: fill,
+      },
+      {
+        stack: [
+          ...phase.deliverables.map((d) => ({
+            text: `• ${d}`,
+            fontSize: 7,
+            color: DARK,
+            margin: [0, 1, 0, 1],
+          })),
+          ...(phase.sign_off ? [{
+            text: `Sign-off: ${phase.sign_off}`,
+            fontSize: 7,
+            bold: true,
+            color: ACCENT,
+            margin: [0, 5, 0, 1],
+          }] : []),
+        ],
+        fillColor: fill,
+      },
     ];
-
-    return new TableRow({
-      children: [
-        new TableCell({
-          shading: cellShading(fill),
-          borders: allBorders(thinBorder),
-          width: { size: COLS[0], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({
-            children: [new TextRun({ text: phase.name, bold: true, size: 16, color: DARK })],
-            spacing: { before: 60, after: 60 },
-          })],
-        }),
-        new TableCell({
-          shading: cellShading(fill),
-          borders: allBorders(thinBorder),
-          width: { size: COLS[1], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({
-            children: [new TextRun({ text: dateStr, size: 15, color: MID })],
-            spacing: { before: 60, after: 60 },
-          })],
-        }),
-        new TableCell({
-          shading: cellShading(fill),
-          borders: allBorders(thinBorder),
-          width: { size: COLS[2], type: WidthType.PERCENTAGE },
-          children: activityParagraphs.length ? activityParagraphs : [new Paragraph({ children: [] })],
-        }),
-        new TableCell({
-          shading: cellShading(fill),
-          borders: allBorders(thinBorder),
-          width: { size: COLS[3], type: WidthType.PERCENTAGE },
-          children: deliverableParagraphs.length ? deliverableParagraphs : [new Paragraph({ children: [] })],
-        }),
-      ],
-    });
   });
 
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [headerRow, ...dataRows],
-  });
+  return {
+    table: {
+      widths: WIDTHS,
+      headerRows: 1,
+      body: [headerRow, ...dataRows],
+    },
+    layout: tblLayout,
+    margin: [0, 0, 0, 8],
+  };
 }
 
-function buildGovernanceTable(rows: CadenceRow[]): Table {
-  const COLS = [25, 25, 15, 35];
-  const HEADS = ["Cadence", "Who", "Format", "Purpose"];
+function buildGovernancePdf(rows: CadenceRow[]): any {
+  // [25%, 25%, 15%, 35%] of 770pt
+  const WIDTHS = [193, 193, 116, 268];
+  const HEADS  = ["Cadence", "Who", "Format", "Purpose"];
 
-  const headerRow = new TableRow({
-    children: HEADS.map((h, i) =>
-      new TableCell({
-        shading: cellShading(DARK),
-        borders: allBorders(thinBorder),
-        width: { size: COLS[i], type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          children: [new TextRun({ text: h, bold: true, color: WHITE, size: 16 })],
-          spacing: { before: 60, after: 60 },
-        })],
-      })
-    ),
-  });
+  const headerRow = HEADS.map((h) => hCell(h));
 
   const dataRows = rows.map((row, idx) => {
-    const fill = idx % 2 === 0 ? WHITE : ALT_ROW;
-    return new TableRow({
-      children: [row.cadence, row.who, row.format, row.purpose].map((text, i) =>
-        new TableCell({
-          shading: cellShading(fill),
-          borders: allBorders(thinBorder),
-          width: { size: COLS[i], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({
-            children: [new TextRun({ text, size: 16, color: DARK })],
-            spacing: { before: 60, after: 60 },
-          })],
-        })
-      ),
-    });
+    const fill = idx % 2 === 0 ? WHITE : ALT;
+    return [row.cadence, row.who, row.format, row.purpose].map((t) => ({
+      text: t,
+      fontSize: 7.5,
+      color: DARK,
+      fillColor: fill,
+    }));
   });
 
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [headerRow, ...dataRows],
-  });
+  return {
+    table: {
+      widths: WIDTHS,
+      headerRows: 1,
+      body: [headerRow, ...dataRows],
+    },
+    layout: tblLayout,
+    margin: [0, 0, 0, 8],
+  };
 }
 
-function buildRisksTable(risks: Risk[]): Table {
-  const COLS = [50, 50];
-  const HEADS = ["Risk", "Mitigation"];
-
-  const headerRow = new TableRow({
-    children: HEADS.map((h, i) =>
-      new TableCell({
-        shading: cellShading(DARK),
-        borders: allBorders(thinBorder),
-        width: { size: COLS[i], type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          children: [new TextRun({ text: h, bold: true, color: WHITE, size: 16 })],
-          spacing: { before: 60, after: 60 },
-        })],
-      })
-    ),
-  });
+function buildRisksPdf(risks: Risk[]): any {
+  const headerRow = [hCell("Risk"), hCell("Mitigation")];
 
   const dataRows = risks.map((r, idx) => {
-    const fill = idx % 2 === 0 ? WHITE : ALT_ROW;
-    return new TableRow({
-      children: [r.risk, r.mitigation].map((text, i) =>
-        new TableCell({
-          shading: cellShading(fill),
-          borders: allBorders(thinBorder),
-          width: { size: COLS[i], type: WidthType.PERCENTAGE },
-          children: [new Paragraph({
-            children: [new TextRun({ text, size: 16, color: i === 0 ? DARK : MID })],
-            spacing: { before: 60, after: 60 },
-          })],
-        })
-      ),
-    });
+    const fill = idx % 2 === 0 ? WHITE : ALT;
+    return [
+      { text: r.risk,       fontSize: 7.5, color: DARK, fillColor: fill },
+      { text: r.mitigation, fontSize: 7.5, color: MID,  fillColor: fill },
+    ];
   });
 
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [headerRow, ...dataRows],
-  });
+  return {
+    table: {
+      widths: [385, 385],
+      headerRows: 1,
+      body: [headerRow, ...dataRows],
+    },
+    layout: tblLayout,
+    margin: [0, 0, 0, 8],
+  };
 }
 
-// ─── LibreOffice PDF conversion ───────────────────────────────────────────────
+// ─── PDF assembler ────────────────────────────────────────────────────────────
 
-/** Try to convert DOCX → PDF via LibreOffice headless.
- *  Returns { buffer, ext } — ext is "pdf" on success, "docx" if LibreOffice
- *  is not installed on this server (ENOENT) so the caller can adjust the filename. */
-async function tryConvertToPdf(docxBuf: Buffer): Promise<{ buffer: Buffer; ext: "pdf" | "docx" }> {
-  const id = randomBytes(8).toString("hex");
-  const tmpDocx = join(tmpdir(), `spack_${id}.docx`);
-  const tmpPdf  = join(tmpdir(), `spack_${id}.pdf`);
-  try {
-    await fsp.writeFile(tmpDocx, docxBuf);
-    await new Promise<void>((resolve, reject) =>
-      execFile(
-        "libreoffice",
-        ["--headless", "--convert-to", "pdf", "--outdir", tmpdir(), tmpDocx],
-        { timeout: 60_000 },
-        (err) => (err ? reject(err) : resolve()),
-      ),
-    );
-    const pdf = await fsp.readFile(tmpPdf);
-    return { buffer: pdf, ext: "pdf" };
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      // LibreOffice is not installed on this server — return the DOCX buffer.
-      // Install with: sudo apt-get install -y libreoffice
-      console.warn("[summary-pack] LibreOffice not found — serving DOCX instead of PDF. Install libreoffice to enable PDF output.");
-      return { buffer: docxBuf, ext: "docx" };
-    }
-    throw err;
-  } finally {
-    await Promise.allSettled([fsp.unlink(tmpDocx), fsp.unlink(tmpPdf)]);
-  }
-}
-
-// ─── DOCX assembler ───────────────────────────────────────────────────────────
-
-async function buildSummaryPackDocx(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
+async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
   let { weeks, step } = getWeekStarts(projectData.startDate, projectData.endDate);
   if (weeks.length === 0) weeks = [new Date(projectData.startDate)];
 
@@ -468,168 +367,159 @@ async function buildSummaryPackDocx(data: SummaryData, projectData: GenerateRequ
   const yearSuffix = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
   const dateRange  = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
 
-  const sponsor    = projectData.clientStakeholders[projectData.sponsorIndex];
-  const flipTeam   = (projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
+  const sponsor  = projectData.clientStakeholders[projectData.sponsorIndex];
+  const flipTeam = (projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
     .map((s) => `${s.name} (${s.role})`)
     .join("  ·  ");
 
-  // ── Page 1: Title + intro + Gantt ──────────────────────────────────────────
-  const p1: (Paragraph | Table)[] = [
-    // Red accent bar at top (thin table with only a top border)
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: {
-        top:              { style: BorderStyle.THICK, size: 6, color: ACCENT },
-        bottom:           noBorder(),
-        left:             noBorder(),
-        right:            noBorder(),
-        insideHorizontal: noBorder(),
-        insideVertical:   noBorder(),
+  const docDef: any = {
+    pageSize: "A4",
+    pageOrientation: "landscape",
+    // Extra top margin (44pt) leaves room below the 5pt accent bar
+    pageMargins: [36, 44, 36, 36],
+
+    // Red accent bar rendered behind content on every page
+    background: (_page: number, pageSize: { width: number; height: number }) => ({
+      canvas: [{
+        type: "rect",
+        x: 0, y: 0,
+        w: pageSize.width,
+        h: 5,
+        color: ACCENT,
+        r: 0,
+      }],
+    }),
+
+    footer: (currentPage: number, pageCount: number) => ({
+      columns: [
+        { text: `${projectData.projectName}  ·  ${projectData.client}`, fontSize: 7, color: MID, margin: [36, 8, 0, 0] },
+        { text: `${currentPage} / ${pageCount}`, fontSize: 7, color: MID, alignment: "right", margin: [0, 8, 36, 0] },
+      ],
+    }),
+
+    defaultStyle: {
+      font: "Helvetica",
+      fontSize: 8,
+      color: DARK,
+    },
+
+    content: [
+      // ── Page 1: Title + intro + Gantt ──────────────────────────────────────
+      {
+        text: projectData.projectName,
+        bold: true,
+        fontSize: 22,
+        color: DARK,
+        margin: [0, 0, 0, 3],
       },
-      rows: [new TableRow({ children: [new TableCell({ borders: allBorders(noBorder), children: [new Paragraph({ children: [] })] })] })],
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: `${projectData.projectName}`, bold: true, color: DARK, size: 48 })],
-      spacing: { before: 160, after: 60 },
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: "Project Summary Pack", color: ACCENT, size: 28, bold: true })],
-      spacing: { after: 60 },
-    }),
-    new Paragraph({
-      children: [
-        new TextRun({ text: `${projectData.client}  ×  Flipside`, color: MID, size: 18 }),
-        new TextRun({ text: `   |   ${projectData.projectType}   |   ${projectData.projectSize}`, color: MID, size: 18 }),
-      ],
-      spacing: { after: 200 },
-    }),
-    new Paragraph({
-      children: [new TextRun({ text: data.intro, size: 18, color: DARK })],
-      spacing: { before: 80, after: 280 },
-    }),
-
-    // Gantt heading
-    new Paragraph({
-      children: [new TextRun({ text: `Phase Overview  —  ${dateRange}`, bold: true, size: 22, color: DARK })],
-      spacing: { before: 80, after: 140 },
-    }),
-    buildGanttTable(data.phases, weeks, step),
-    // Legend
-    new Paragraph({
-      children: [new TextRun({ text: "  Active phase  ", size: 14, color: MID })],
-      spacing: { before: 80 },
-    }),
-
-    // Team / sponsor line at bottom of page 1
-    new Paragraph({
-      children: [
-        new TextRun({ text: "Flipside team: ", bold: true, size: 16, color: DARK }),
-        new TextRun({ text: flipTeam, size: 16, color: MID }),
-      ],
-      spacing: { before: 200 },
-    }),
-    ...(sponsor ? [new Paragraph({
-      children: [
-        new TextRun({ text: "Client sponsor: ", bold: true, size: 16, color: DARK }),
-        new TextRun({ text: `${sponsor.name} (${sponsor.role})`, size: 16, color: MID }),
-      ],
-      spacing: { after: 80 },
-    })] : []),
-  ];
-
-  // ── Page 2: Phase detail ────────────────────────────────────────────────────
-  const p2: (Paragraph | Table)[] = [
-    new Paragraph({
-      pageBreakBefore: true,
-      children: [new TextRun({ text: "Phase detail — what each phase produces", bold: true, size: 26, color: DARK })],
-      spacing: { after: 180 },
-    }),
-    buildPhaseDetailTable(data.phases),
-  ];
-
-  // ── Page 3: Assumptions + Governance + Risks ────────────────────────────────
-  const assumptionsTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [
-      new TableRow({
-        children: [
-          new TableCell({
-            shading: cellShading(DARK),
-            borders: allBorders(thinBorder),
-            children: [new Paragraph({
-              children: [new TextRun({ text: "Assumptions", bold: true, color: WHITE, size: 16 })],
-              spacing: { before: 60, after: 60 },
-            })],
-          }),
-        ],
-      }),
-      ...data.assumptions.map((a, idx) =>
-        new TableRow({
-          children: [
-            new TableCell({
-              shading: cellShading(idx % 2 === 0 ? WHITE : ALT_ROW),
-              borders: allBorders(thinBorder),
-              children: [new Paragraph({
-                children: [new TextRun({ text: `• ${a}`, size: 16, color: DARK })],
-                spacing: { before: 50, after: 50 },
-              })],
-            }),
-          ],
-        })
-      ),
-    ],
-  });
-
-  const p3: (Paragraph | Table)[] = [
-    new Paragraph({
-      pageBreakBefore: true,
-      children: [new TextRun({ text: "Assumptions", bold: true, size: 26, color: DARK })],
-      spacing: { after: 160 },
-    }),
-    assumptionsTable,
-    new Paragraph({ spacing: { after: 240 }, children: [] }),
-
-    new Paragraph({
-      children: [new TextRun({ text: "Governance & review cadence", bold: true, size: 26, color: DARK })],
-      spacing: { after: 160 },
-    }),
-    buildGovernanceTable(data.governance_cadence),
-    new Paragraph({ spacing: { after: 240 }, children: [] }),
-
-    new Paragraph({
-      children: [new TextRun({ text: "Key risks & mitigations", bold: true, size: 26, color: DARK })],
-      spacing: { after: 160 },
-    }),
-    buildRisksTable(data.risks),
-    new Paragraph({ spacing: { after: 240 }, children: [] }),
-
-    new Paragraph({
-      children: [
-        new TextRun({ text: "Next step:  ", bold: true, size: 18, color: DARK }),
-        new TextRun({ text: data.next_step, size: 18, color: MID }),
-      ],
-      spacing: { after: 80 },
-    }),
-  ];
-
-  // A4 landscape: width=297mm=16838 twips, height=210mm=11906 twips
-  const doc = new Document({
-    sections: [{
-      properties: {
-        page: {
-          size: {
-            orientation: PageOrientation.LANDSCAPE,
-            width: 16838,
-            height: 11906,
+      {
+        text: "Project Summary Pack",
+        fontSize: 13,
+        bold: true,
+        color: ACCENT,
+        margin: [0, 0, 0, 4],
+      },
+      {
+        text: `${projectData.client}  ×  Flipside   |   ${projectData.projectType}   |   ${projectData.projectSize}`,
+        fontSize: 8,
+        color: MID,
+        margin: [0, 0, 0, 10],
+      },
+      {
+        text: data.intro,
+        fontSize: 8.5,
+        color: DARK,
+        margin: [0, 0, 0, 12],
+      },
+      sectionHead(`Phase Overview  —  ${dateRange}`),
+      buildGanttPdf(data.phases, weeks, step),
+      {
+        text: "■  Active phase",
+        fontSize: 7,
+        color: ACCENT,
+        margin: [0, 2, 0, 10],
+      },
+      {
+        columns: [
+          {
+            width: "50%",
+            fontSize: 7.5,
+            text: [
+              { text: "Flipside team: ", bold: true },
+              { text: flipTeam, color: MID },
+            ],
           },
-          margin: { top: 720, right: 900, bottom: 720, left: 900 }, // ~0.5" top/bottom, ~0.625" sides
-        },
+          ...(sponsor ? [{
+            width: "50%",
+            fontSize: 7.5,
+            text: [
+              { text: "Client sponsor: ", bold: true },
+              { text: `${sponsor.name} (${sponsor.role})`, color: MID },
+            ],
+          }] : []),
+        ],
       },
-      children: [...p1, ...p2, ...p3],
-    }],
-  });
 
-  return Packer.toBuffer(doc);
+      // ── Page 2: Phase detail ────────────────────────────────────────────────
+      sectionHead("Phase detail  —  what each phase produces", true),
+      buildPhaseDetailPdf(data.phases),
+
+      // ── Page 3: Assumptions + Governance + Risks ────────────────────────────
+      sectionHead("Assumptions", true),
+      {
+        table: {
+          widths: ["*"],
+          body: [
+            [hCell("Key assumptions")],
+            ...data.assumptions.map((a, idx) => [{
+              text: `• ${a}`,
+              fontSize: 7.5,
+              color: DARK,
+              fillColor: idx % 2 === 0 ? WHITE : ALT,
+            }]),
+          ],
+        },
+        layout: tblLayout,
+        margin: [0, 0, 0, 12],
+      },
+
+      sectionHead("Governance & review cadence"),
+      buildGovernancePdf(data.governance_cadence),
+
+      sectionHead("Key risks & mitigations"),
+      buildRisksPdf(data.risks),
+
+      {
+        text: [
+          { text: "Next step:  ", bold: true, fontSize: 9 },
+          { text: data.next_step, fontSize: 9, color: MID },
+        ],
+        margin: [0, 10, 0, 0],
+      },
+    ],
+  };
+
+  // Standard PDF fonts need no URL fetching; this no-op resolver satisfies the API
+  const urlResolver = {
+    resolve: (_url: string) => undefined,
+    resolved: () => Promise.resolve(),
+  };
+
+  const printer = new PdfPrinter(hlFonts, hlVfs, urlResolver);
+  const pdfDoc  = await printer.createPdfKitDocument(docDef);
+
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    pdfDoc.on("readable", () => {
+      let chunk: Buffer | null;
+      while ((chunk = pdfDoc.read(1 << 20)) !== null) {
+        chunks.push(chunk);
+      }
+    });
+    pdfDoc.on("end",   () => resolve(Buffer.concat(chunks)));
+    pdfDoc.on("error", reject);
+    pdfDoc.end();
+  });
 }
 
 // ─── Public entry point ───────────────────────────────────────────────────────
@@ -678,11 +568,9 @@ export async function generateSummaryPack(
     throw new Error("AI summary pack response is missing required array fields (phases/assumptions/risks/governance_cadence)");
   }
 
-  const docxBuffer     = await buildSummaryPackDocx(data, projectData);
-  const { buffer, ext } = await tryConvertToPdf(docxBuffer);
-
+  const buffer     = await buildSummaryPackPdf(data, projectData);
   const clientSlug = projectData.client.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 20);
-  const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.${ext}`;
+  const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.pdf`;
   const preview    = `${data.phases.length} phases · ${data.assumptions.length} assumptions · ${data.risks.length} risks`;
 
   return { buffer, filename, preview };
