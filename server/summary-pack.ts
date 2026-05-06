@@ -31,6 +31,11 @@ const WHITE  = "#FFFFFF";
 // A4 landscape content width: 841.89 − 36 − 36 ≈ 770 pt
 const PAGE_W = 770;
 
+interface ClientBranding {
+  colour?:    string; // hex e.g. "#C41E3A"
+  logoBase64?: string; // full data URI e.g. "data:image/png;base64,..."
+}
+
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 interface Milestone {
   name: string;
@@ -244,7 +249,7 @@ function sectionHead(text: string, pageBreak = false): any {
 
 // ─── Table builders ───────────────────────────────────────────────────────────
 
-function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
+function buildGanttPdf(phases: Phase[], weeks: Date[], step: number, accentColor: string = ACCENT): any {
   const headerRow = [
     hCell("Phase"),
     ...weeks.map((w) => hCell(fmtWeek(w), { fontSize: 6, align: "center" })),
@@ -253,15 +258,13 @@ function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
   const dataRows: any[][] = [];
   phases.forEach((phase, idx) => {
     const rowFill = idx % 2 === 0 ? WHITE : ALT;
-    // Phase bar row
     dataRows.push([
       { text: phase.name, fontSize: 7, bold: true, color: DARK, fillColor: rowFill },
       ...weeks.map((w) => ({
         text: " ",
-        fillColor: phaseActive(phase, w, step) ? ACCENT : rowFill,
+        fillColor: phaseActive(phase, w, step) ? accentColor : rowFill,
       })),
     ]);
-    // Milestone sub-rows
     for (const ms of phase.milestones ?? []) {
       const mIdx = milestoneWeekIdx(ms.date, weeks);
       dataRows.push([
@@ -287,7 +290,7 @@ function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
   };
 }
 
-function buildPhaseDetailPdf(phases: Phase[]): any {
+function buildPhaseDetailPdf(phases: Phase[], accentColor: string = ACCENT): any {
   // [18%, 14%, 36%, 32%] of 770pt
   const WIDTHS = [139, 108, 277, 246];
   const HEADS  = ["Phase", "Dates", "Key Activities", "Deliverables & Review"];
@@ -324,7 +327,7 @@ function buildPhaseDetailPdf(phases: Phase[]): any {
             text: `Sign-off: ${phase.sign_off}`,
             fontSize: 7,
             bold: true,
-            color: ACCENT,
+            color: accentColor,
             margin: [0, 5, 0, 1],
           }] : []),
         ],
@@ -394,7 +397,7 @@ function buildRisksPdf(risks: Risk[]): any {
   };
 }
 
-function buildContactsTable(projectData: GenerateRequest): any {
+function buildContactsTable(projectData: GenerateRequest, accentColor: string = ACCENT): any {
   const flipTeam   = projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[];
   const clientTeam = projectData.clientStakeholders   as { name: string; role: string }[];
   const sponsorIdx = projectData.sponsorIndex;
@@ -414,8 +417,8 @@ function buildContactsTable(projectData: GenerateRequest): any {
       : "";
 
     return [
-      { text: fmText, fontSize: 7.5, color: DARK,                     fillColor: fill },
-      { text: cmText, fontSize: 7.5, color: isSponsor ? ACCENT : DARK, fillColor: fill },
+      { text: fmText, fontSize: 7.5, color: DARK,                          fillColor: fill },
+      { text: cmText, fontSize: 7.5, color: isSponsor ? accentColor : DARK, fillColor: fill },
     ];
   });
 
@@ -435,29 +438,33 @@ function buildContactsTable(projectData: GenerateRequest): any {
 
 // ─── PDF assembler ────────────────────────────────────────────────────────────
 
-async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
+async function buildSummaryPackPdf(
+  data: SummaryData,
+  projectData: GenerateRequest,
+  clientBranding?: ClientBranding,
+): Promise<Buffer> {
   let { weeks, step } = getWeekStarts(projectData.startDate, projectData.endDate);
   if (weeks.length === 0) weeks = [new Date(projectData.startDate)];
 
-  const firstYear  = new Date(projectData.startDate).getFullYear();
-  const lastYear   = new Date(projectData.endDate).getFullYear();
-  const yearSuffix = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
-  const dateRange  = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
+  const firstYear   = new Date(projectData.startDate).getFullYear();
+  const lastYear    = new Date(projectData.endDate).getFullYear();
+  const yearSuffix  = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
+  const dateRange   = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
+  const accentColor = clientBranding?.colour ?? ACCENT;
+  const logo        = clientBranding?.logoBase64;
 
   const docDef: any = {
     pageSize: "A4",
     pageOrientation: "landscape",
-    // Extra top margin (44pt) leaves room below the 5pt accent bar
     pageMargins: [36, 44, 36, 36],
 
-    // Red accent bar rendered behind content on every page
     background: (_page: number, pageSize: { width: number; height: number }) => ({
       canvas: [{
         type: "rect",
         x: 0, y: 0,
         w: pageSize.width,
         h: 5,
-        color: ACCENT,
+        color: accentColor,
         r: 0,
       }],
     }),
@@ -476,25 +483,25 @@ async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateReque
     },
 
     content: [
-      // ── Page 1: Title + intro + Gantt ──────────────────────────────────────
+      // ── Page 1: Title + logo + intro + Gantt ───────────────────────────────
       {
-        text: projectData.projectName,
-        bold: true,
-        fontSize: 22,
-        color: DARK,
-        margin: [0, 0, 0, 3],
-      },
-      {
-        text: "Project Summary Pack",
-        fontSize: 13,
-        bold: true,
-        color: ACCENT,
-        margin: [0, 0, 0, 4],
-      },
-      {
-        text: `${projectData.client}  ×  Flipside   |   ${projectData.projectType}   |   ${projectData.projectSize}`,
-        fontSize: 8,
-        color: MID,
+        columns: [
+          {
+            width: "*",
+            stack: [
+              { text: projectData.projectName, bold: true, fontSize: 22, color: DARK, margin: [0, 0, 0, 3] },
+              { text: "Project Summary Pack", fontSize: 13, bold: true, color: accentColor, margin: [0, 0, 0, 4] },
+              { text: `${projectData.client}  ×  Flipside   |   ${projectData.projectType}   |   ${projectData.projectSize}`, fontSize: 8, color: MID },
+            ],
+          },
+          ...(logo ? [{
+            width: 140,
+            image: logo,
+            fit: [140, 60],
+            alignment: "right",
+            margin: [8, 4, 0, 0],
+          }] : []),
+        ],
         margin: [0, 0, 0, 10],
       },
       {
@@ -504,12 +511,12 @@ async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateReque
         margin: [0, 0, 0, 12],
       },
       sectionHead(`Phase Overview  —  ${dateRange}`),
-      buildGanttPdf(data.phases, weeks, step),
-      buildContactsTable(projectData),
+      buildGanttPdf(data.phases, weeks, step, accentColor),
+      buildContactsTable(projectData, accentColor),
 
       // ── Page 2: Phase detail ────────────────────────────────────────────────
       sectionHead("Phase detail  —  what each phase produces", true),
-      buildPhaseDetailPdf(data.phases),
+      buildPhaseDetailPdf(data.phases, accentColor),
 
       // ── Page 3: Assumptions + Governance + Risks ────────────────────────────
       sectionHead("Assumptions", true),
@@ -576,6 +583,7 @@ export async function generateSummaryPack(
   settings: AiSettings,
   supportingDocs: Array<{ name: string; content: string }>,
   apiKey: string,
+  clientBranding?: ClientBranding,
 ): Promise<{ buffer: Buffer; filename: string; preview: string }> {
   const prompt = buildSummaryPrompt(projectData, supportingDocs);
   let rawJson: string;
@@ -615,7 +623,7 @@ export async function generateSummaryPack(
     throw new Error("AI summary pack response is missing required array fields (phases/assumptions/risks/governance_cadence)");
   }
 
-  const buffer     = await buildSummaryPackPdf(data, projectData);
+  const buffer     = await buildSummaryPackPdf(data, projectData, clientBranding);
   const clientSlug = projectData.client.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 20);
   const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.pdf`;
   const preview    = `${data.phases.length} phases · ${data.assumptions.length} assumptions · ${data.risks.length} risks`;

@@ -5,7 +5,7 @@ import { useLogout, useAuth } from "@/hooks/use-auth";
 import { Link } from "wouter";
 import { ProjectFormView, type FullProject } from "@/components/project-form-view";
 import { EditProjectModal } from "@/components/edit-project-modal";
-import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound, ExternalLink } from "lucide-react";
+import { Plus, Settings, FileText, Package, Trash2, Edit2, UploadCloud, Download, Users, UserPlus, Save, BookOpen, CheckCircle2, X, Eye, EyeOff, Building2, FolderOpen, ChevronDown, ChevronRight, KeyRound, ExternalLink, Palette } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -33,6 +33,27 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PaginationBar, PAGE_SIZE, paginateItems } from "@/components/ui/pagination-bar";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+
+// Resize an image File to a data URI, capped at maxW × maxH pixels
+async function resizeImageToDataUri(file: File, maxW: number, maxH: number): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = Math.min(1, maxW / img.width, maxH / img.height);
+        const canvas = document.createElement("canvas");
+        canvas.width  = Math.round(img.width  * ratio);
+        canvas.height = Math.round(img.height * ratio);
+        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.src = e.target!.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 type ApiUser = {
   id: string;
@@ -620,7 +641,7 @@ export default function AdminPage() {
   };
 
   // Clients tab state
-  type AdminClient = { id: string; name: string; createdAt: string; createdBy: string };
+  type AdminClient = { id: string; name: string; brandColour: string | null; logoBase64: string | null; createdAt: string; createdBy: string };
   type AdminProject = {
     id: string; clientId: string; clientName: string; sheetRef: string; projectName: string;
     projectType: string; projectSize?: string | null; value?: string | null;
@@ -638,6 +659,9 @@ export default function AdminPage() {
   const [newClientName, setNewClientName] = useState("");
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [editClientName, setEditClientName] = useState("");
+  const [brandingClient, setBrandingClient] = useState<AdminClient | null>(null);
+  const [editBrandColour, setEditBrandColour] = useState("#000000");
+  const [editLogoDataUri, setEditLogoDataUri] = useState<string | null>(null);
   const [projectClientFilter, setProjectClientFilter] = useState("__all__");
   const [expandedAdminProject, setExpandedAdminProject] = useState<string | null>(null);
   const [deletingAdminDoc, setDeletingAdminDoc] = useState<string | null>(null);
@@ -715,6 +739,24 @@ export default function AdminPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
       setEditingClientId(null);
       toast.success("Client updated");
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const updateBrandingMutation = useMutation({
+    mutationFn: async ({ id, brandColour, logoBase64 }: { id: string; brandColour: string | null; logoBase64: string | null }) => {
+      const res = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brandColour, logoBase64 }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed to update branding"); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clients"] });
+      setBrandingClient(null);
+      toast.success("Branding updated");
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -1490,6 +1532,77 @@ export default function AdminPage() {
                   </div>
                 </form>
               )}
+              {/* Client branding dialog */}
+              <Dialog open={brandingClient !== null} onOpenChange={(open) => { if (!open) setBrandingClient(null); }}>
+                <DialogContent className="max-w-sm">
+                  <DialogHeader>
+                    <DialogTitle>Client Branding — {brandingClient?.name}</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-5 py-2">
+                    <div className="space-y-2">
+                      <Label>Brand Colour</Label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={editBrandColour}
+                          onChange={(e) => setEditBrandColour(e.target.value)}
+                          className="h-9 w-9 cursor-pointer rounded border p-0.5"
+                        />
+                        <Input
+                          value={editBrandColour}
+                          onChange={(e) => setEditBrandColour(e.target.value)}
+                          placeholder="#000000"
+                          className="w-28 font-mono text-sm"
+                        />
+                        <span className="text-xs text-muted-foreground">Replaces red in summary pack</span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Logo</Label>
+                      {editLogoDataUri ? (
+                        <div className="flex items-center gap-3">
+                          <img src={editLogoDataUri} alt="Logo preview" className="h-12 max-w-[150px] rounded border bg-muted object-contain p-1" />
+                          <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => setEditLogoDataUri(null)}>
+                            <X className="mr-1 h-4 w-4" /> Remove
+                          </Button>
+                        </div>
+                      ) : (
+                        <label className="flex cursor-pointer items-center gap-2">
+                          <span className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground">
+                            <UploadCloud className="h-4 w-4" /> Upload logo
+                          </span>
+                          <span className="text-xs text-muted-foreground">PNG, SVG or JPG · shown top-right of summary pack</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="sr-only"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              setEditLogoDataUri(await resizeImageToDataUri(file, 320, 120));
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setBrandingClient(null)}>Cancel</Button>
+                    <Button
+                      onClick={() => brandingClient && updateBrandingMutation.mutate({
+                        id: brandingClient.id,
+                        brandColour: editBrandColour || null,
+                        logoBase64: editLogoDataUri,
+                      })}
+                      disabled={updateBrandingMutation.isPending}
+                    >
+                      {updateBrandingMutation.isPending ? "Saving…" : "Save changes"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
               {clientsLoading ? (
                 <div className="p-8 text-center text-muted-foreground text-sm">Loading…</div>
               ) : clientsData.length === 0 ? (
@@ -1526,11 +1639,30 @@ export default function AdminPage() {
                       }
                       return (
                         <TableRow key={client.id}>
-                          <TableCell className="font-medium">{client.name}</TableCell>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center gap-2">
+                              {client.name}
+                              {client.brandColour && (
+                                <span
+                                  className="inline-block h-3 w-3 flex-shrink-0 rounded-full border"
+                                  style={{ backgroundColor: client.brandColour }}
+                                  title={`Brand colour: ${client.brandColour}`}
+                                />
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell className="text-muted-foreground">{projectsPerClient[client.id] ?? 0}</TableCell>
                           <TableCell className="text-muted-foreground text-sm">{new Date(client.createdAt).toLocaleDateString("en-GB")}</TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost" size="icon"
+                                className={`h-8 w-8 hover:text-primary ${client.brandColour || client.logoBase64 ? "text-primary" : "text-muted-foreground"}`}
+                                title="Client branding"
+                                onClick={() => { setBrandingClient(client); setEditBrandColour(client.brandColour ?? "#000000"); setEditLogoDataUri(client.logoBase64); }}
+                              >
+                                <Palette className="h-4 w-4" />
+                              </Button>
                               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => { setEditingClientId(client.id); setEditClientName(client.name); }}>
                                 <Edit2 className="h-4 w-4" />
                               </Button>

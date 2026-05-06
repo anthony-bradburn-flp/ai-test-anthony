@@ -513,9 +513,14 @@ export async function registerRoutes(
   });
 
   app.patch("/api/clients/:id", requireAdmin, async (req, res) => {
-    const { name } = req.body;
-    if (!name?.trim()) return res.status(400).json({ message: "Name required" });
-    const updated = await storage.updateClient(req.params.id, name.trim());
+    const { name, brandColour, logoBase64 } = req.body;
+    if (name !== undefined && !String(name).trim()) return res.status(400).json({ message: "Name cannot be empty" });
+    const updates: { name?: string; brandColour?: string | null; logoBase64?: string | null } = {};
+    if (name !== undefined) updates.name = String(name).trim();
+    if ("brandColour" in req.body) updates.brandColour = brandColour ?? null;
+    if ("logoBase64"  in req.body) updates.logoBase64  = logoBase64  ?? null;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ message: "No fields to update" });
+    const updated = await storage.updateClient(req.params.id, updates);
     if (!updated) return res.status(404).json({ message: "Not found" });
     res.json(updated);
   });
@@ -925,7 +930,13 @@ export async function registerRoutes(
         // If start arrives after the AI call finishes, the done event can race past
         // start processing and leave the spinner stuck.
         send({ type: "start", count: 1, truncatedDocs: [], missingTemplates: [] });
-        const { buffer, filename, preview } = await generateSummaryPack(projectData, settings, rawDocs, activeKey!);
+        const clientRecord = (await storage.listClients()).find(
+          (c) => c.name.toLowerCase() === projectData.client.toLowerCase()
+        );
+        const clientBranding = clientRecord?.brandColour || clientRecord?.logoBase64
+          ? { colour: clientRecord.brandColour ?? undefined, logoBase64: clientRecord.logoBase64 ?? undefined }
+          : undefined;
+        const { buffer, filename, preview } = await generateSummaryPack(projectData, settings, rawDocs, activeKey!, clientBranding);
         const summaryFmt = filename.endsWith(".pdf") ? "pdf" : "docx";
         sendDoc({ type: "document", document: { name: "Project Summary Pack", filename, format: summaryFmt, content: buffer.toString("base64"), preview } });
         audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: 1, provider: settings.provider, supportingDocsCount: rawDocs.length, passthroughCount: 0, placeholderCount: 0 });
