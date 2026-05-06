@@ -926,7 +926,8 @@ export async function registerRoutes(
         // start processing and leave the spinner stuck.
         send({ type: "start", count: 1, truncatedDocs: [], missingTemplates: [] });
         const { buffer, filename, preview } = await generateSummaryPack(projectData, settings, rawDocs, activeKey!);
-        sendDoc({ type: "document", document: { name: "Project Summary Pack", filename, format: "pdf", content: buffer.toString("base64"), preview } });
+        const summaryFmt = filename.endsWith(".pdf") ? "pdf" : "docx";
+        sendDoc({ type: "document", document: { name: "Project Summary Pack", filename, format: summaryFmt, content: buffer.toString("base64"), preview } });
         audit("DOCUMENTS_GENERATED", req, { client: projectData.client, docsCount: 1, provider: settings.provider, supportingDocsCount: rawDocs.length, passthroughCount: 0, placeholderCount: 0 });
 
         if (projectId) {
