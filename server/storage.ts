@@ -143,7 +143,7 @@ export interface IStorage {
   listClients(): Promise<Client[]>;
   getClient(id: string): Promise<Client | undefined>;
   createClient(name: string, createdBy: string): Promise<Client>;
-  updateClient(id: string, name: string): Promise<Client | undefined>;
+  updateClient(id: string, updates: { name?: string; brandColour?: string | null; logoBase64?: string | null }): Promise<Client | undefined>;
   deleteClient(id: string): Promise<void>;
   // Projects
   listProjects(clientId?: string, createdBy?: string): Promise<Project[]>;
@@ -368,13 +368,13 @@ class DbStorage implements IStorage {
   }
 
   async createClient(name: string, createdBy: string): Promise<Client> {
-    const row = { id: randomUUID(), name, createdAt: new Date().toISOString(), createdBy };
+    const row = { id: randomUUID(), name, brandColour: null, logoBase64: null, createdAt: new Date().toISOString(), createdBy };
     await db.insert(clientsTable).values(row);
     return row;
   }
 
-  async updateClient(id: string, name: string): Promise<Client | undefined> {
-    const rows = await db.update(clientsTable).set({ name }).where(eq(clientsTable.id, id)).returning();
+  async updateClient(id: string, updates: { name?: string; brandColour?: string | null; logoBase64?: string | null }): Promise<Client | undefined> {
+    const rows = await db.update(clientsTable).set(updates).where(eq(clientsTable.id, id)).returning();
     return rows[0];
   }
 

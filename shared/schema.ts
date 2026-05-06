@@ -67,6 +67,8 @@ export const aiSettingsTable = pgTable("ai_settings", {
 export const clientsTable = pgTable("clients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  brandColour: text("brand_colour"),
+  logoBase64:  text("logo_base64"),
   createdAt: text("created_at").notNull(),
   createdBy: text("created_by").notNull(),
 });

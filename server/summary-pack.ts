@@ -31,7 +31,17 @@ const WHITE  = "#FFFFFF";
 // A4 landscape content width: 841.89 − 36 − 36 ≈ 770 pt
 const PAGE_W = 770;
 
+interface ClientBranding {
+  colour?:    string; // hex e.g. "#C41E3A"
+  logoBase64?: string; // full data URI e.g. "data:image/png;base64,..."
+}
+
 // ─── Interfaces ───────────────────────────────────────────────────────────────
+interface Milestone {
+  name: string;
+  date: string; // YYYY-MM-DD
+}
+
 interface Phase {
   name:           string;
   start_date:     string;
@@ -40,6 +50,7 @@ interface Phase {
   key_activities: string[];
   deliverables:   string[];
   sign_off:       string | null;
+  milestones:     Milestone[];
 }
 
 interface CadenceRow {
@@ -121,7 +132,11 @@ Return exactly this JSON structure — all fields required:
       "workshop": "Workshop title/description or null if none",
       "key_activities": ["concise activity", "concise activity"],
       "deliverables": ["deliverable name", "deliverable name"],
-      "sign_off": "Sign-off description and date (e.g. 'Client approval w/c 18 May') or null"
+      "sign_off": "Sign-off description and date (e.g. 'Client approval w/c 18 May') or null",
+      "milestones": [
+        { "name": "Kick-off", "date": "YYYY-MM-DD" },
+        { "name": "Deliverable sign-off", "date": "YYYY-MM-DD" }
+      ]
     }
   ],
   "assumptions": ["assumption statement"],
@@ -148,7 +163,8 @@ RULES
 - Include 3–4 governance cadence rows (lightweight: weekly check-in, bi-weekly status, phase reviews, workshops).
 - Identify 3–4 key risks with concrete mitigations.
 - Dates must be valid YYYY-MM-DD within the project's date range.
-- Keep activities and deliverables short (5–8 words each).`;
+- Keep activities and deliverables short (5–8 words each).
+- Each phase must include 1–3 milestones. Milestone dates must fall within the phase's start_date–end_date. Milestones should represent key events: kick-off, workshop, review, sign-off, or major deliverable.`;
 
   return prompt;
 }
@@ -183,6 +199,17 @@ function phaseActive(phase: Phase, weekStart: Date, step: number): boolean {
   const we = new Date(weekStart);
   we.setDate(weekStart.getDate() + step * 7 - 1);
   return weekStart <= pe && we >= ps;
+}
+
+// Returns the index of the last week column whose start is on or before the milestone date.
+function milestoneWeekIdx(dateStr: string, weeks: Date[]): number {
+  const d = new Date(dateStr);
+  let idx = 0;
+  for (let i = 0; i < weeks.length; i++) {
+    if (weeks[i] <= d) idx = i;
+    else break;
+  }
+  return idx;
 }
 
 // ─── pdfmake helpers ──────────────────────────────────────────────────────────
@@ -222,21 +249,35 @@ function sectionHead(text: string, pageBreak = false): any {
 
 // ─── Table builders ───────────────────────────────────────────────────────────
 
-function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
+function buildGanttPdf(phases: Phase[], weeks: Date[], step: number, accentColor: string = ACCENT): any {
   const headerRow = [
     hCell("Phase"),
     ...weeks.map((w) => hCell(fmtWeek(w), { fontSize: 6, align: "center" })),
   ];
 
-  const dataRows = phases.map((phase, idx) => {
+  const dataRows: any[][] = [];
+  phases.forEach((phase, idx) => {
     const rowFill = idx % 2 === 0 ? WHITE : ALT;
-    return [
-      { text: phase.name, fontSize: 7, color: DARK, fillColor: rowFill },
+    dataRows.push([
+      { text: phase.name, fontSize: 7, bold: true, color: DARK, fillColor: rowFill },
       ...weeks.map((w) => ({
         text: " ",
-        fillColor: phaseActive(phase, w, step) ? ACCENT : rowFill,
+        fillColor: phaseActive(phase, w, step) ? accentColor : rowFill,
       })),
-    ];
+    ]);
+    for (const ms of phase.milestones ?? []) {
+      const mIdx = milestoneWeekIdx(ms.date, weeks);
+      dataRows.push([
+        { text: `  ↳ ${ms.name}`, fontSize: 6.5, color: MID, fillColor: WHITE },
+        ...weeks.map((_, i) => ({
+          text: i === mIdx ? "◆" : "",
+          fontSize: 7,
+          color: DARK,
+          alignment: "center",
+          fillColor: WHITE,
+        })),
+      ]);
+    }
   });
 
   return {
@@ -249,7 +290,7 @@ function buildGanttPdf(phases: Phase[], weeks: Date[], step: number): any {
   };
 }
 
-function buildPhaseDetailPdf(phases: Phase[]): any {
+function buildPhaseDetailPdf(phases: Phase[], accentColor: string = ACCENT): any {
   // [18%, 14%, 36%, 32%] of 770pt
   const WIDTHS = [139, 108, 277, 246];
   const HEADS  = ["Phase", "Dates", "Key Activities", "Deliverables & Review"];
@@ -286,7 +327,7 @@ function buildPhaseDetailPdf(phases: Phase[]): any {
             text: `Sign-off: ${phase.sign_off}`,
             fontSize: 7,
             bold: true,
-            color: ACCENT,
+            color: accentColor,
             margin: [0, 5, 0, 1],
           }] : []),
         ],
@@ -356,36 +397,74 @@ function buildRisksPdf(risks: Risk[]): any {
   };
 }
 
+function buildContactsTable(projectData: GenerateRequest, accentColor: string = ACCENT): any {
+  const flipTeam   = projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[];
+  const clientTeam = projectData.clientStakeholders   as { name: string; role: string }[];
+  const sponsorIdx = projectData.sponsorIndex;
+
+  const maxRows = Math.max(flipTeam.length, clientTeam.length);
+  const dataRows = Array.from({ length: maxRows }, (_, i) => {
+    const fill      = i % 2 === 0 ? WHITE : ALT;
+    const fm        = flipTeam[i];
+    const cm        = clientTeam[i];
+    const isSponsor = cm != null && i === sponsorIdx;
+
+    const fmText = fm
+      ? `${fm.name}  —  ${fm.role}${fm.allocation != null && fm.allocation < 100 ? ` (${fm.allocation}%)` : ""}`
+      : "";
+    const cmText = cm
+      ? `${cm.name}  —  ${cm.role}${isSponsor ? "  ★ Sponsor" : ""}`
+      : "";
+
+    return [
+      { text: fmText, fontSize: 7.5, color: DARK,                          fillColor: fill },
+      { text: cmText, fontSize: 7.5, color: isSponsor ? accentColor : DARK, fillColor: fill },
+    ];
+  });
+
+  return {
+    table: {
+      widths: ["*", "*"],
+      headerRows: 1,
+      body: [
+        [hCell("Flipside Team"), hCell("Client Team")],
+        ...dataRows,
+      ],
+    },
+    layout: tblLayout,
+    margin: [0, 8, 0, 0],
+  };
+}
+
 // ─── PDF assembler ────────────────────────────────────────────────────────────
 
-async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateRequest): Promise<Buffer> {
+async function buildSummaryPackPdf(
+  data: SummaryData,
+  projectData: GenerateRequest,
+  clientBranding?: ClientBranding,
+): Promise<Buffer> {
   let { weeks, step } = getWeekStarts(projectData.startDate, projectData.endDate);
   if (weeks.length === 0) weeks = [new Date(projectData.startDate)];
 
-  const firstYear  = new Date(projectData.startDate).getFullYear();
-  const lastYear   = new Date(projectData.endDate).getFullYear();
-  const yearSuffix = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
-  const dateRange  = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
-
-  const sponsor  = projectData.clientStakeholders[projectData.sponsorIndex];
-  const flipTeam = (projectData.flipsideStakeholders as { name: string; role: string; allocation?: number }[])
-    .map((s) => `${s.name} (${s.role})`)
-    .join("  ·  ");
+  const firstYear   = new Date(projectData.startDate).getFullYear();
+  const lastYear    = new Date(projectData.endDate).getFullYear();
+  const yearSuffix  = firstYear === lastYear ? `${firstYear}` : `${firstYear}–${lastYear}`;
+  const dateRange   = `${fmtWeek(weeks[0])} – ${fmtWeek(weeks[weeks.length - 1])} ${yearSuffix}`;
+  const accentColor = clientBranding?.colour ?? ACCENT;
+  const logo        = clientBranding?.logoBase64;
 
   const docDef: any = {
     pageSize: "A4",
     pageOrientation: "landscape",
-    // Extra top margin (44pt) leaves room below the 5pt accent bar
     pageMargins: [36, 44, 36, 36],
 
-    // Red accent bar rendered behind content on every page
     background: (_page: number, pageSize: { width: number; height: number }) => ({
       canvas: [{
         type: "rect",
         x: 0, y: 0,
         w: pageSize.width,
         h: 5,
-        color: ACCENT,
+        color: accentColor,
         r: 0,
       }],
     }),
@@ -404,25 +483,25 @@ async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateReque
     },
 
     content: [
-      // ── Page 1: Title + intro + Gantt ──────────────────────────────────────
+      // ── Page 1: Title + logo + intro + Gantt ───────────────────────────────
       {
-        text: projectData.projectName,
-        bold: true,
-        fontSize: 22,
-        color: DARK,
-        margin: [0, 0, 0, 3],
-      },
-      {
-        text: "Project Summary Pack",
-        fontSize: 13,
-        bold: true,
-        color: ACCENT,
-        margin: [0, 0, 0, 4],
-      },
-      {
-        text: `${projectData.client}  ×  Flipside   |   ${projectData.projectType}   |   ${projectData.projectSize}`,
-        fontSize: 8,
-        color: MID,
+        columns: [
+          {
+            width: "*",
+            stack: [
+              { text: projectData.projectName, bold: true, fontSize: 22, color: DARK, margin: [0, 0, 0, 3] },
+              { text: "Project Summary Pack", fontSize: 13, bold: true, color: accentColor, margin: [0, 0, 0, 4] },
+              { text: `${projectData.client}  ×  Flipside   |   ${projectData.projectType}   |   ${projectData.projectSize}`, fontSize: 8, color: MID },
+            ],
+          },
+          ...(logo ? [{
+            width: 140,
+            image: logo,
+            fit: [140, 60],
+            alignment: "right",
+            margin: [8, 4, 0, 0],
+          }] : []),
+        ],
         margin: [0, 0, 0, 10],
       },
       {
@@ -432,37 +511,12 @@ async function buildSummaryPackPdf(data: SummaryData, projectData: GenerateReque
         margin: [0, 0, 0, 12],
       },
       sectionHead(`Phase Overview  —  ${dateRange}`),
-      buildGanttPdf(data.phases, weeks, step),
-      {
-        text: "■  Active phase",
-        fontSize: 7,
-        color: ACCENT,
-        margin: [0, 2, 0, 10],
-      },
-      {
-        columns: [
-          {
-            width: "50%",
-            fontSize: 7.5,
-            text: [
-              { text: "Flipside team: ", bold: true },
-              { text: flipTeam, color: MID },
-            ],
-          },
-          ...(sponsor ? [{
-            width: "50%",
-            fontSize: 7.5,
-            text: [
-              { text: "Client sponsor: ", bold: true },
-              { text: `${sponsor.name} (${sponsor.role})`, color: MID },
-            ],
-          }] : []),
-        ],
-      },
+      buildGanttPdf(data.phases, weeks, step, accentColor),
+      buildContactsTable(projectData, accentColor),
 
       // ── Page 2: Phase detail ────────────────────────────────────────────────
       sectionHead("Phase detail  —  what each phase produces", true),
-      buildPhaseDetailPdf(data.phases),
+      buildPhaseDetailPdf(data.phases, accentColor),
 
       // ── Page 3: Assumptions + Governance + Risks ────────────────────────────
       sectionHead("Assumptions", true),
@@ -529,6 +583,7 @@ export async function generateSummaryPack(
   settings: AiSettings,
   supportingDocs: Array<{ name: string; content: string }>,
   apiKey: string,
+  clientBranding?: ClientBranding,
 ): Promise<{ buffer: Buffer; filename: string; preview: string }> {
   const prompt = buildSummaryPrompt(projectData, supportingDocs);
   let rawJson: string;
@@ -568,7 +623,7 @@ export async function generateSummaryPack(
     throw new Error("AI summary pack response is missing required array fields (phases/assumptions/risks/governance_cadence)");
   }
 
-  const buffer     = await buildSummaryPackPdf(data, projectData);
+  const buffer     = await buildSummaryPackPdf(data, projectData, clientBranding);
   const clientSlug = projectData.client.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 20);
   const filename   = `${projectData.sheetRef}_${clientSlug}_Summary_Pack.pdf`;
   const preview    = `${data.phases.length} phases · ${data.assumptions.length} assumptions · ${data.risks.length} risks`;
