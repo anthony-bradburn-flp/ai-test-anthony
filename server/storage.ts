@@ -1,4 +1,4 @@
-import { eq, and, desc, asc, max } from "drizzle-orm";
+import { eq, and, desc, asc, max, inArray } from "drizzle-orm";
 import { type User, type InsertUser, type Client, type Project, type StoredDocument, type SupportingDocument, type Draft } from "@shared/schema";
 import { users, templatesTable, packagesTable, aiSettingsTable, clientsTable, projectsTable, storedDocumentsTable, supportingDocumentsTable, draftsTable } from "@shared/schema";
 import { db } from "./db";
@@ -159,7 +159,9 @@ export interface IStorage {
   deleteDocument(id: string): Promise<StoredDocument | undefined>;
   deleteDocumentsByProject(projectId: string): Promise<void>;
   deleteDocumentsByVersion(projectId: string, version: number): Promise<void>;
+  deleteDocumentsByNames(projectId: string, names: string[]): Promise<void>;
   markDocumentsNotLatest(projectId: string): Promise<void>;
+  markDocumentsNotLatestByNames(projectId: string, names: string[]): Promise<void>;
   // Supporting Documents
   listSupportingDocs(projectId: string): Promise<SupportingDocument[]>;
   createSupportingDoc(data: Omit<SupportingDocument, "id">): Promise<SupportingDocument>;
@@ -485,6 +487,25 @@ class DbStorage implements IStorage {
     await db.update(storedDocumentsTable)
       .set({ isLatest: false })
       .where(eq(storedDocumentsTable.projectId, projectId));
+  }
+
+  async deleteDocumentsByNames(projectId: string, names: string[]): Promise<void> {
+    if (names.length === 0) return;
+    const docs = await db.select().from(storedDocumentsTable)
+      .where(and(eq(storedDocumentsTable.projectId, projectId), inArray(storedDocumentsTable.name, names)));
+    for (const doc of docs) {
+      const fullPath = join(DATA_DIR, doc.storagePath);
+      try { if (existsSync(fullPath)) unlinkSync(fullPath); } catch { /* ignore */ }
+    }
+    await db.delete(storedDocumentsTable)
+      .where(and(eq(storedDocumentsTable.projectId, projectId), inArray(storedDocumentsTable.name, names)));
+  }
+
+  async markDocumentsNotLatestByNames(projectId: string, names: string[]): Promise<void> {
+    if (names.length === 0) return;
+    await db.update(storedDocumentsTable)
+      .set({ isLatest: false })
+      .where(and(eq(storedDocumentsTable.projectId, projectId), inArray(storedDocumentsTable.name, names)));
   }
 
   // ---- Supporting Documents ----

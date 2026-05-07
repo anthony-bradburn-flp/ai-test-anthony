@@ -645,7 +645,15 @@ export async function registerRoutes(
 
   app.get("/api/projects/:id/documents/download-all", requireAuth, async (req, res) => {
     const docs = await storage.listDocuments(req.params.id);
-    const latest = docs.filter((d) => d.isLatest);
+    if (docs.length === 0) return res.status(404).json({ message: "No documents found" });
+    // Take the highest-version document for each unique name so simplified deck and
+    // regular documents coexist correctly regardless of the isLatest flag state.
+    const byName = new Map<string, typeof docs[0]>();
+    for (const doc of docs) {
+      const existing = byName.get(doc.name);
+      if (!existing || doc.version > existing.version) byName.set(doc.name, doc);
+    }
+    const latest = Array.from(byName.values());
     if (latest.length === 0) return res.status(404).json({ message: "No documents found" });
     const zip = new JSZip();
     for (const doc of latest) {
@@ -948,13 +956,19 @@ export async function registerRoutes(
               if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
               const existingDocs = await storage.listDocuments(projectId);
               const runId = randomBytes(8).toString("hex");
+              const generatedNames = generatedDocBuffers.map((b) => b.name);
               let nextVersion = 1;
               if (existingDocs.length > 0) {
+                const existingWithSameName = existingDocs.filter((d) => generatedNames.includes(d.name));
                 if (versionMode === "replace") {
-                  await storage.deleteDocumentsByProject(projectId);
-                } else {
+                  // Only delete docs being replaced — preserve unrelated documents
+                  await storage.deleteDocumentsByNames(projectId, generatedNames);
+                } else if (existingWithSameName.length > 0) {
                   nextVersion = Math.max(...existingDocs.map((d) => d.version)) + 1;
-                  await storage.markDocumentsNotLatest(projectId);
+                  // Only mark same-named docs as not-latest — preserve others
+                  await storage.markDocumentsNotLatestByNames(projectId, generatedNames);
+                } else if (existingDocs.length > 0) {
+                  nextVersion = Math.max(...existingDocs.map((d) => d.version)) + 1;
                 }
               }
               for (const { name, filename: fn, format, buffer: buf } of generatedDocBuffers) {
@@ -1306,15 +1320,18 @@ export async function registerRoutes(
             if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
             const existingDocs = await storage.listDocuments(projectId);
             const runId = randomBytes(8).toString("hex");
+            const generatedNames = generatedDocBuffers.map((b) => b.name);
 
             let nextVersion = 1;
             if (existingDocs.length > 0) {
               if (versionMode === "replace") {
-                await storage.deleteDocumentsByProject(projectId);
+                // Only delete docs being regenerated — preserve unrelated documents
+                await storage.deleteDocumentsByNames(projectId, generatedNames);
               } else {
                 const maxVersion = Math.max(...existingDocs.map((d) => d.version));
                 nextVersion = maxVersion + 1;
-                await storage.markDocumentsNotLatest(projectId);
+                // Only mark same-named docs as not-latest — preserve others
+                await storage.markDocumentsNotLatestByNames(projectId, generatedNames);
               }
             }
 
@@ -1621,7 +1638,13 @@ function buildPlaceholderArrayPrompt(
 function fillDocxTemplate(filePath: string, data: Record<string, unknown>): Buffer {
   const content = readFileSync(filePath, "binary");
   const zip = new PizZip(content);
-  const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+  const doc = new Docxtemplater(zip, {
+    paragraphLoop: true,
+    linebreaks: true,
+    // Return empty string for any variable not present in data rather than throwing,
+    // so templates with extra or differently-named placeholders still render cleanly.
+    nullGetter() { return ""; },
+  });
   doc.render(data);
   return doc.getZip().generate({ type: "nodebuffer", compression: "DEFLATE" }) as Buffer;
 }
