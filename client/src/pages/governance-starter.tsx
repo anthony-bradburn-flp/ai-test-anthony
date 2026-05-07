@@ -619,8 +619,10 @@ export default function GovernanceStarterPage() {
       setSelectedClientId(clientId);
     }
 
-    // Ensure project exists — create new or update existing with current form values
-    let projectId = selectedProjectId || undefined;
+    // When navigating from My Projects via ?projectId=, use the URL param as the
+    // authoritative project ID — guards against state not being set yet on first render.
+    const urlProjectId = new URLSearchParams(window.location.search).get("projectId");
+    let projectId = selectedProjectId || urlProjectId || undefined;
     const sponsor = values.clientStakeholders[values.sponsorIndex] ?? values.clientStakeholders[0];
     const projectPayload = {
       clientId, clientName: values.client,
@@ -691,7 +693,7 @@ export default function GovernanceStarterPage() {
     }
 
     // If existing project already has docs, ask to replace or version
-    if (projectId && selectedProjectId) {
+    if (projectId) {
       const docsRes = await fetch(`/api/projects/${projectId}/documents`);
       const existingDocs = docsRes.ok ? await docsRes.json() : [];
       if (existingDocs.length > 0) {
