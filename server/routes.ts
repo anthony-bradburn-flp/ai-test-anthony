@@ -1676,13 +1676,14 @@ function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buff
     zip.file(wsPath, xlsxProcessSheet(wsXml, sharedStrings, data));
   }
 
-  // Scalar replacement in shared strings — loop-template strings are replaced
-  // inline during row expansion so they don't need to be touched here.
-  // Unknown/array keys are left as-is so loop markers survive until expansion.
-  const newSsXml = ssXml.replace(/\{(\w+)\}/g, (match, key) => {
-    const val = (data as Record<string, unknown>)[key];
-    return val !== undefined && !Array.isArray(val) ? xlsxEsc(String(val)) : match;
-  });
+  // Scalar replacement in shared strings.
+  // Excel splits styled cells into multiple <r><t>…</t></r> runs, so
+  // {project_name} may appear as "{" + "project_name" + "}" across separate
+  // runs — the simple regex can't find it.  We handle this by concatenating
+  // each <si>'s text, doing the replacement on the full text, and rewriting
+  // only entries that changed (dropping the per-run styling, which is
+  // acceptable for pure-placeholder cells).
+  const newSsXml = xlsxReplaceSharedStringScalars(ssXml, data as Record<string, unknown>);
   zip.file(ssPath, newSsXml);
 
   // Remove the calc chain — row insertions invalidate formula cell addresses
@@ -1697,6 +1698,45 @@ function fillXlsxTemplate(filePath: string, data: Record<string, unknown>): Buff
 
 function xlsxEsc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Replace scalar {variable} placeholders in sharedStrings.xml, handling the
+ * common case where Excel splits styled text across multiple <r><t> runs.
+ * For each <si> we concatenate all <t> values to get the full text, do the
+ * replacement, then rewrite only changed entries as a clean single-run string.
+ * Unchanged entries are left untouched so rich-text formatting is preserved.
+ */
+function xlsxReplaceSharedStringScalars(
+  ssXml: string,
+  data: Record<string, unknown>
+): string {
+  return ssXml.replace(/<si>([\s\S]*?)<\/si>/g, (_siMatch, siContent) => {
+    // Concatenate all <t> text segments into the full cell value
+    const tParts = [...siContent.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)];
+    if (tParts.length === 0) return _siMatch;
+
+    const fullText = tParts
+      .map((m) => m[1])
+      .join("")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+
+    if (!fullText.includes("{")) return _siMatch;
+
+    const replaced = fullText.replace(/\{(\w+)\}/g, (match, key) => {
+      const val = data[key];
+      return val !== undefined && !Array.isArray(val) ? String(val) : match;
+    });
+
+    if (replaced === fullText) return _siMatch; // nothing changed — keep original
+
+    // Rewrite as a minimal single-run entry (styling lost only for placeholder cells)
+    const escaped = xlsxEsc(replaced);
+    const tXml = /^\s|\s$/.test(replaced)
+      ? `<t xml:space="preserve">${escaped}</t>`
+      : `<t>${escaped}</t>`;
+    return `<si>${tXml}</si>`;
+  });
 }
 
 /** Extract plain-text values from every <si> element in sharedStrings.xml */
