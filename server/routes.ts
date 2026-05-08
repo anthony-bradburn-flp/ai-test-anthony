@@ -1254,7 +1254,7 @@ export async function registerRoutes(
             if (fmt === "xlsx" && doc.sheets?.length) {
               const tplForDoc = findTemplate(doc.name);
               const tplPath = tplForDoc?.filePath && existsSync(tplForDoc.filePath) ? tplForDoc.filePath : null;
-              fileBuffer = tplPath ? buildXlsxFromTemplate(tplPath, doc.sheets) : buildXlsxBuffer(doc.sheets);
+              fileBuffer = tplPath ? buildXlsxFromTemplate(tplPath, doc.sheets, placeholderData) : buildXlsxBuffer(doc.sheets);
               filename = filename.replace(/\.[^.]+$/, ".xlsx");
               preview = doc.sheets.map(s => `[Sheet: ${s.name}]\n${[s.headers, ...s.rows].map(r => r.join("\t")).join("\n")}`).join("\n\n");
             } else if (fmt === "docx" && doc.content) {
@@ -2037,7 +2037,8 @@ function buildXlsxBuffer(sheets: Array<{ name: string; headers: string[]; rows: 
  */
 function buildXlsxFromTemplate(
   templatePath: string,
-  aiSheets: Array<{ name: string; headers: string[]; rows: string[][] }>
+  aiSheets: Array<{ name: string; headers: string[]; rows: string[][] }>,
+  placeholderData?: Record<string, unknown>
 ): Buffer {
   const raw = readFileSync(templatePath);
   const zip = new PizZip(raw);
@@ -2062,6 +2063,14 @@ function buildXlsxFromTemplate(
     if (!aiSheet?.rows.length) continue; // keep template sheet untouched
 
     zip.file(wsPath, xlsxInjectAiData(wsXml, aiSheet));
+  }
+
+  // Patch sharedStrings.xml so any {placeholder} in the kept template rows
+  // (e.g. the title/branding row 1) are replaced with real project values.
+  if (placeholderData) {
+    const ssPath = "xl/sharedStrings.xml";
+    const ssXml  = zip.files[ssPath]?.asText();
+    if (ssXml) zip.file(ssPath, xlsxReplaceSharedStringScalars(ssXml, placeholderData));
   }
 
   delete (zip.files as Record<string, unknown>)["xl/calcChain.xml"];
