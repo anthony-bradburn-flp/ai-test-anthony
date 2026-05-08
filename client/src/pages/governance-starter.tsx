@@ -129,6 +129,9 @@ export default function GovernanceStarterPage() {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const generateAbortRef = useRef<AbortController | null>(null);
   const generationStartRef = useRef<number | null>(null);
+  // Stable ref so async closures and effects always read the current project ID
+  // without depending on selectedProjectId state (which may lag behind on first render).
+  const generatingProjectIdRef = useRef<string>("");
   const [isDownloading, setIsDownloading] = useState(false);
   const [generatingStage, setGeneratingStage] = useState("");
   const [generatingStart, setGeneratingStart] = useState(0);
@@ -153,6 +156,14 @@ export default function GovernanceStarterPage() {
   const [projectSelectValue, setProjectSelectValue] = useState<string>("");
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
+
+  // Single authoritative cleanup — call this everywhere instead of scattering
+  // setIsGenerating(false) + setGeneratingStage("") across the codebase.
+  const clearGeneration = useCallback(() => {
+    setIsGenerating(false);
+    setGeneratingStage("");
+    generatingProjectIdRef.current = "";
+  }, []);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) navigate("/login");
@@ -277,29 +288,32 @@ export default function GovernanceStarterPage() {
   // Polling fallback: if the stream fails to deliver the `done` event (e.g. NGINX
   // buffering, network blip, or a bug in the server-side event ordering), this
   // catches documents that landed in the DB and clears the spinner regardless.
-  // Runs every 10 s while generating, stops as soon as it detects new docs.
+  // Uses generatingProjectIdRef (not selectedProjectId state) so it always has
+  // the correct project ID even when navigating via ?projectId= on first render.
+  // Runs every 5 s while generating, stops as soon as it detects new docs.
   useEffect(() => {
-    if (!isGenerating || !selectedProjectId) return;
+    if (!isGenerating) return;
+    const pid = generatingProjectIdRef.current;
+    if (!pid) return;
     const startTime = generationStartRef.current;
     if (!startTime) return;
     const id = setInterval(async () => {
       try {
-        const r = await fetch(`/api/projects/${selectedProjectId}/documents`);
+        const r = await fetch(`/api/projects/${pid}/documents`);
         if (!r.ok) return;
         const docs = await r.json() as Array<{ generatedAt?: string }>;
         const hasNew = docs.some(d => d.generatedAt && new Date(d.generatedAt).getTime() > startTime);
         if (hasNew) {
           console.log("[generate] polling fallback detected new docs — clearing spinner");
-          setIsGenerating(false);
-          setGeneratingStage("");
-          queryClient.invalidateQueries({ queryKey: ["/api/projects", selectedProjectId, "documents"] });
+          clearGeneration();
+          queryClient.invalidateQueries({ queryKey: ["/api/projects", pid, "documents"] });
           toast.success("Documents generated — loading…");
           clearInterval(id);
         }
       } catch {}
-    }, 10_000);
+    }, 5_000);
     return () => clearInterval(id);
-  }, [isGenerating, selectedProjectId, queryClient]);
+  }, [isGenerating, clearGeneration, queryClient]);
 
   const ACCEPTED_TYPES = ".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.csv,.txt,.md";
   const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per file
@@ -486,12 +500,13 @@ export default function GovernanceStarterPage() {
 
     const abortController = new AbortController();
     generateAbortRef.current = abortController;
+    generatingProjectIdRef.current = projectId ?? "";
+    generationStartRef.current = Date.now();
     setIsGenerating(true);
     setGeneratedDocs(null);
     setGenerateError(null);
     setGeneratingStage("Preparing your request…");
     setGeneratingStart(Date.now());
-    generationStartRef.current = Date.now();
 
     // Soft warning at 7 min: generation is slow but still running — keep spinner up.
     // Hard cutoff at 15 min: assume the connection is dead and force the UI clear.
@@ -501,8 +516,7 @@ export default function GovernanceStarterPage() {
     }, 7 * 60 * 1000);
     const bailoutTimer = setTimeout(() => {
       console.warn("[generate] bailout timer fired — forcing isGenerating=false after 15m");
-      setIsGenerating(false);
-      setGeneratingStage("");
+      clearGeneration();
       toast.warning("Generation timed out after 15 minutes. Check My Projects — documents may have been saved in the background.");
     }, 15 * 60 * 1000);
 
@@ -559,16 +573,7 @@ export default function GovernanceStarterPage() {
             setGeneratedDocs((prev) => [...(prev ?? []), event.document as GeneratedDocument]);
           } else if (event.type === "done") {
             console.log("[generate] done event received at", new Date().toISOString());
-            // Immediate attempt — works when not inside an ongoing React render.
-            setIsGenerating(false);
-            setGeneratingStage("");
-            // Macrotask fallback — React 18 always flushes state in a fresh macrotask
-            // even when the microtask queue is busy from concurrent React Query work.
-            setTimeout(() => {
-              console.log("[generate] setTimeout fired — forcing isGenerating=false");
-              setIsGenerating(false);
-              setGeneratingStage("");
-            }, 0);
+            clearGeneration();
             if (projectId) {
               queryClient.invalidateQueries({ queryKey: ["/api/projects/mine"] });
               queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "documents"] });
@@ -603,10 +608,8 @@ export default function GovernanceStarterPage() {
       clearTimeout(warnTimer);
       clearTimeout(bailoutTimer);
       generateAbortRef.current = null;
-      console.log("[generate] finally block — setting isGenerating=false");
-      setIsGenerating(false);
-      setGeneratingStage("");
-      setTimeout(() => { setIsGenerating(false); setGeneratingStage(""); }, 0);
+      console.log("[generate] finally block — clearGeneration()");
+      clearGeneration();
     }
   };
 
